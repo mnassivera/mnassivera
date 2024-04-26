@@ -1,0 +1,194 @@
+---
+title: "M1 Internship"
+author: "Marc Nassivera"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# 1. Imports
+
+**Import libraries**
+
+```{r}
+# Import files
+library(readxl) # Used for reading Excel files (.xls and .xlsx) for data import
+
+# To manipulate data
+library(dplyr) # For data manipulation & visualization
+
+# To plot
+library(ggplot2) # Data visualization library for creating elegant and customizable plots
+```
+
+**Import census dataset**
+
+```{r}
+setwd("C:/Users/nassi/OneDrive/Bureau/Travail/ENS/M1/Stage/Stage/Données et analyses/")
+```
+
+```{r}
+# Import census dataframe
+census <- read_excel("M1STG_df.xlsx", sheet = "Census") %>%
+  as_tibble()
+```
+
+**Check the dataset**
+
+```{r}
+dim(census) # Number of rows and columns
+summary(census) # Data summary
+```
+
+**Format dataset**
+
+```{r}
+# Remove "Picture" column then convert data into tibble
+census <- census %>%
+  select(c("Plot_id_census", "Sample_num", "Germination_date", "Seedling_id"))
+
+# Combine Plot + Sample together into a new column to create a unique id for each sample
+census <- census %>%
+  mutate(Sample_id = paste(Plot_id_census, Sample_num, sep = "."))
+
+print(census)
+```
+
+**Import plots dataset**
+
+```{r}
+# Import and format plot dataframe 
+plots <- read_excel("M1STG_df.xlsx", sheet = "Plots_description") %>%
+  as_tibble() %>%
+  mutate(Longitude_W = as.numeric(Longitude_W)) %>%
+  mutate(Latitude_N = as.numeric(Latitude_N))
+
+print(plots)
+```
+
+**Merge the 2 datasets**
+
+```{r}
+data <- merge(census, plots) %>%
+  as_tibble()
+
+print(data)
+```
+
+# 2. Analysis preparation
+
+**Get information on species**
+
+```{r}
+```
+
+**Prepare ggplot for future visualisation**
+
+```{r}
+# Set global theme options
+theme_set(theme_classic() + theme(panel.border = element_rect(fill=NA)))
+```
+
+# 3. Data exploration
+
+**Census dataset**
+
+```{r}
+# Number of individuals per forest plot
+ggplot(data, aes(x = reorder(Plot_id, Age), fill = as.factor(Age))) +
+  geom_bar(color = "grey10")
+```
+The distribution of individuals across different plot age classes is strongly unbalanced. While the agricultural plot and the youngest forests exhibit a high number of individuals, the secondary forest ranging from 50 years, had a very low number of germinating seeds per tray. The stark contrast between 10- and 50-year-old forests suggests a shift in the forest structure. Beyond 50 years, the marked decline in the abundance of germinating seeds is not sustained, as the number of individuals remains stable. 
+Now we need to partition this into trees, lianas, and herbs to have a better understanding of the community.
+
+```{r}
+# Number of individuals per samples plot
+
+# Barplot
+ggplot(data, aes(x = Sample_num, fill = as.factor(Age))) +
+  geom_bar(color = "grey10") + 
+  #facet_wrap(~ Plot_id) +
+  facet_wrap(~ Plot_id, scales = "free_y")
+
+# Boxlot
+data_subset <- data %>%
+  group_by(Sample_id) %>%
+  mutate(Num_individuals = n()) %>% # Count the number of individuals recorder in each tray
+  ungroup()
+data_subset <- data_subset %>%
+  distinct(Sample_id, .keep_all = TRUE) # Keep only 1 copy in order not to demultiply the number of copies per sample
+
+ggplot(data_subset, aes(x = reorder(Plot_id, Age), y = Num_individuals, fill = as.factor(Age))) +
+  geom_boxplot(outlier.shape = NA) + # Remove the outliers as I add the datapoints on top of the boxplot
+  geom_point(position = position_jitter(width = 0.2), size = 0.9, color = "black", alpha = 0.7) # Add jittered data points
+```
+The secondary forest plots aged over 50 years exhibit notably few individuals per sample, an expected result aligning with the initial observation of a low number of individuals recorded within these plots. However, this graph highlights also the variability between different samples of a same plot. 
+Possibility of testing the statistical significance of these results. 
+- Should we partition into growth form before?
+- Is it interesting to do it on the number of individuals, as we know that hebaceous produce a lot more seeds than trees (r strategy)?
+- Should we group the 2 plots from the same age together? But then we would need to take into account the clustered design of the exepriment (all the samples from the same age are divided into two distinct locations).
+
+```{r}
+# Number of different species per plot
+species_counts_plot <- data %>%
+  group_by(Plot_id) %>%
+  summarise(num_species = n_distinct(Seedling_id))
+species_counts_plot <- merge(species_counts_plot, plots) # Get the Age column back in the species_count_plot tibble
+
+ggplot(species_counts_plot, aes(x = reorder(Plot_id, Age), y = num_species, fill = as.factor(Age))) +
+  geom_bar(stat = "identity", color = "grey10") + 
+  labs(x = "Plot", y = "Number of Species")
+```
+
+```{r}
+# Rank-abundance of species
+
+# Count the number of individuals for each species
+species_counts <- census %>%
+  count(Seedling_id, name = "Total_count")
+
+# Count the number of unique plots for each species
+species_plot_count <- data %>%
+  group_by(Seedling_id) %>%
+  summarise(Num_Plots = n_distinct(Plot_id))
+
+# Merge the two datasets together
+species_counts <- merge(species_counts, species_plot_count)
+
+# Create the bar plot
+ggplot(species_counts, aes(x = reorder(Seedling_id, -Total_count), y = Total_count, fill = as.factor(Num_Plots))) +
+#ggplot(species_counts, aes(x = Seedling_id, y = Total_count, fill = as.factor(Num_Plots))) +
+#ggplot(species_counts, aes(x = Seedling_id, y = Total_count, fill = Num_Plots)) +
+  geom_bar(stat = "identity", color = "grey10") +
+  #scale_fill_viridis_c() +  # Continuous color scale
+  labs(x = "Species", y = "Number of Individuals", fill = "Number of Plots") +
+  #scale_y_log10() +  # Log scale on y-axis
+  theme_classic() + 
+  theme(panel.border = element_rect(fill=NA)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+Have to keep in mind that it is not the final dataset and that things might certainely change (species are here somehow duplicate because of the "uncertainety tag" that I add on some of the individuals, waiting for confirmation). However, we see that a few species are abundant whereas most of them are very rare, or only recorded once in the study. We therefore have a very long tail of rare species. 
+
+**Plots dataset**
+
+```{r}
+# Explore correlation between plots age & latitude/longitude
+
+# Scatter plot for Age vs Latitude
+ggplot(plots, aes(x = Age, y = Latitude_N)) +
+  geom_point() +
+  labs(x = "Age", y = "Latitude")
+
+# Scatter plot for Age vs Longitude
+ggplot(plots, aes(x = Age, y = Longitude_W)) +
+  geom_point() +
+  labs(x = "Age", y = "Longitude")
+
+# Calculation of correlation coefficient
+cor(plots$Age, plots$Latitude_N)
+cor(plots$Age, plots$Longitude_W)
+```
+
+Plots location is tightly related to its age. This stark correlation results from the patterns of deforestation and abandonment in agriculture areas. Indeed, deforestation doesn't occur in a randomly manner, but progressively over the remaining forests and the same is observed with abandonment. This leads to a latitudinal gradient in secondary forest age.
+This might potentialy lead to different patterns of precipitation, wind or nutrient distribution over the chronosequence. However, the different plots are very close to one another and the meteorological variables are likely to be very similar. For the nutrients, this information could be checked.
+Spatial autocorrelation can be taken into account in the analyses.
+
