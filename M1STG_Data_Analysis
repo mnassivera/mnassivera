@@ -5,9 +5,9 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
-# 1. Imports
+# 1. Settings
 
-**Import libraries**
+## 1.1. Import librairies
 
 ```{r}
 # Import files
@@ -19,26 +19,61 @@ library(openxlsx) # To save dataframes into .xlsx format
 # To manipulate data
 library(dplyr) # For data manipulation & visualization
 library(tidyr) # To reshape, tidy, and organize datasets
+library(tibble) # To manipulate tibbles
 
 # To plot
 library(ggplot2) # Data visualization library for creating elegant and customizable plots
+library(gridExtra) # TO display multiple plots
 library(ggbeeswarm) # Used to avoid points overlap while plotting boxplots
 library(ggeffects) # For plotting predicted values from GLMM models
 library(ggrepel) # To avoid overlap while plotting text
+library(corrplot) # To plot and study correlations
+library(ggpubr) # To plot p-values
 
 # To perform analyses
 library(lme4) # Used to perform GLMM
+library(MASS) # Used to perform GLM with negative binomial distribution
+library(betareg) # Used to perform GLM with beta distribution
 library(MuMIn) # Used to analyse GLMM models
 library(DHARMa) # Used to analyse GLMM models
 library(BiodiversityR) # Used for accumulation curves
 library(vegan) # Used for different data analysis
+library(rstatix) # To perform statistical tests
+library(FD) # To analyse functional diversity
+
+library(conflicted) # To resolve conflicts
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
 ```
 
-**Import census dataset**
+## 1.2. Set working directory
 
 ```{r}
 setwd("C:/Users/nassi/OneDrive/Bureau/Travail/ENS/M1/Stage/Stage/Données et analyses/")
 ```
+
+## 1.3. Set seed for reproductibility
+
+```{r}
+set.seed(123)
+```
+
+## 1.4. Prepare ggplot for future visualisation
+
+```{r}
+# Set global theme options
+theme_set(theme_classic(base_size = 20))
+
+age_palette <- c("#ED7D31", "#FBCE0D", "#92D050", "#00BC5E", "#009999", "#44546A", "grey80")
+growth_form_palette <- c("#CACACA", "#ED7D31","#186782")
+rank_abundance_palette <- c("#264653", "#287271", "#2A9D8F", "#8AB17D", "#BABB74", "#E9C46A","#EFB366","#F4A261","#EE8959","#E76F51", "#C65C3E", "#AB3A2F")
+
+model_palette <- c("Woody + Non woody" = "black", "Woody" = "#4472C4", "Non woody" = "#ED7D31")
+```
+
+# 2. Imports
+
+## 2.1. Import census dataset
 
 ```{r}
 # Import census dataframe
@@ -46,32 +81,19 @@ census <- read_excel("M1STG_df.xlsx", sheet = "Census") %>%
   as_tibble()
 ```
 
-**Check the dataset**
-
-```{r}
-dim(census) # Number of rows and columns
-summary(census) # Data summary
-```
-
-**Format dataset**
+### Format dataset
 
 ```{r}
 # Remove "Picture" column then convert data into tibble
 census <- census %>%
-  select(c("Plot_id_census", "Sample_num", "Germination_date", "Seedling_id"))
+  dplyr::select(c("Plot_id_census", "Sample_num", "Germination_date", "Seedling_id"))
 
 # Combine Plot + Sample together into a new column to create a unique id for each sample
 census <- census %>%
   mutate(Sample_id = paste(Plot_id_census, Sample_num, sep = "."))
-
-# Only because it is not the final dataset
-# Necessary to perform the analysis
-# Remove ", Uncertainety" string from Seedling_id column and everything after the first comma
-census$Seedling_id <- sub(",.*", "", census$Seedling_id)
-head(census)
 ```
 
-**Import plots dataset**
+## 2.2. Import plots and explanatory_variables datasets
 
 ```{r}
 # Import and format plot dataframe 
@@ -80,20 +102,44 @@ plots <- read_excel("M1STG_df.xlsx", sheet = "Plots_description") %>%
   mutate(Longitude_W = as.numeric(Longitude_W)) %>%
   mutate(Latitude_N = as.numeric(Latitude_N))
 head(plots)
+
+# Import and format explanatory_variables dataframe 
+explanatory_variables <- read_excel("C://Users//nassi//OneDrive//Bureau//Travail//ENS//M1//Stage//Stage//Données et analyses//Other_data//Explanatory_variables//explanatory_variables.xlsx") %>%
+  as_tibble()
+head(explanatory_variables)
 ```
 
-**Import species dataset**
+### Format dataset
+
+```{r}
+plots <- plots %>%
+  merge(explanatory_variables, all = TRUE)
+```
+
+```{r}
+# Standardization of variables
+
+# Loop through the columns and standardize
+for (col in c("Age", "Nitrogen", "Phosphorus", "MeanSlope", "Nb_individuals_std_veg", "Nb_species_std_veg", "Integrity")) {
+  plots[[paste0(col, "_std")]] <- decostand(plots[[col]], method = "standardize")
+}
+```
+
+## 2.3. Import species dataset
 
 ```{r}
 # Import and format species dataframe 
 species <- read_excel("M1STG_df.xlsx", sheet = "Species_description") %>%
-  as_tibble()
+  as_tibble() %>%
+  dplyr::select(Seedling_id, Growth_form, Woody)
 head(species)
 ```
 
-**Merge the 3 datasets**
+### Merge the 3 datasets together
 
 ```{r}
+species$Seedling_id[species$Seedling_id %in% census$Seedling_id == FALSE]
+
 # First, merge census and plots
 data <- merge(census, plots) %>%
   as_tibble()
@@ -104,52 +150,123 @@ data <- merge(data, species)
 head(data)
 ```
 
-**Import samples dataset**
+## 2.4. Import samples dataset
 
 ```{r}
-#Import a dataset with all possible Sample_id values
+# Import a dataset with all possible Sample_id values
 samples <- read_excel("M1STG_df.xlsx", sheet = "Samples_list") %>%
   as_tibble()
 ```
 
-# 2. Data exploration
+## 2.5. Import standing_vegetation dataset
 
-**Data Overview**
+```{r}
+# Import standing_vegetation
+standing_vegetation <- read_excel("Other_data\\Standing_vegetation_census.xls", sheet = "BCNM_secondary_forest_1ha_plots") %>%
+  as_tibble()
+
+# Import species_code
+species_code <- read_excel("Other_data\\Standing_vegetation_census.xls", sheet = "sp_code") %>%
+  as_tibble()
+
+# Merge both in a single dataset
+standing_vegetation <- merge(standing_vegetation, species_code)
+
+# Remove species_code dataframe
+rm(species_code)
+```
+
+**Format standing_vegetation**
+
+```{r}
+# Create a Species_id
+standing_vegetation$Species_id <- paste0(standing_vegetation$Genus, " ", standing_vegetation$Species)
+
+# Remove non usefull columns
+standing_vegetation$Species_code <- NULL
+standing_vegetation$Age_past <- NULL
+standing_vegetation$dbh <- NULL
+```
+
+## 2.6. Import Dalling dataset
+
+```{r}
+# Dataset processed (not the original dataset)
+dalling <- read_excel("Other_data\\dalling_census.xlsx", sheet = "Dalling_final") %>%
+  as_tibble()
+
+# Dataset of this study, processed to have the same format as dalling
+nassivera <- read_excel("Other_data\\dalling_census.xlsx", sheet = "Nassivera_final") %>%
+  as_tibble() %>%
+  select(-CER_2024, -JOB_2024, -EF1_2024, -EF2_2024)
+
+dalling_nassivera <- merge(dalling, nassivera, all = TRUE)
+dalling_nassivera[is.na(dalling_nassivera)] <- 0
+rownames(dalling_nassivera) <- dalling_nassivera[,1]
+dalling_nassivera[,1] <- NULL
+```
+
+## 2.7. Import functional traits dataset
+
+```{r}
+functional_traits <- read_excel("Other_data\\functional_traits.xlsx") %>%
+  as_tibble()
+```
+
+# 3. Data exploration
+
+## 3.1. Data Overview
 
 ```{r}
 # Number  of individuals recorded
-print(nrow(data))
+paste("Number of individuals recorded:", nrow(data))
 
 # Number of species recorded
-census %>%
+paste ("Number of species recorded:",
+  census %>%
   filter(Seedling_id != "Unidentified") %>%
-  summarise(num_species = n_distinct(Seedling_id))
+  summarise(num_species = n_distinct(Seedling_id)))
 
 # Identification rate (taking morphospecies into account)
 n_unidentified_species <- sum(census$Seedling_id == "Unidentified")
 percentage_identified <- 100 - (n_unidentified_species / nrow(census)) * 100
-print(percentage_identified)
+paste("Identification rate (taking morphospecies into account): ", round(percentage_identified, 2))
 
-# Identification rate (excluding morphospecies)
-morphospecies <- sum(startsWith(census$Seedling_id, "?"))
-total_unidentified <- n_unidentified_species + morphospecies
-percentage_identified_2 <- 100 - (total_unidentified / nrow(census)) * 100
-print(percentage_identified_2)
+# Number of morphospecies
+paste ("Number of individuals that are morphospecies:", sum(startsWith(census$Seedling_id, "?")))
+paste ("Proportion of individuals that are morphospecies:", sum(startsWith(census$Seedling_id, "?"))/nrow(census))
+paste("Number of species that are morphospecies:", sum(startsWith(species$Seedling_id, "?")))
+paste("Proportion of species that are morphospecies:", sum(startsWith(species$Seedling_id, "?"))/88)
+
+# Number of identified to species level
+filter_species <- function(species) {
+  !grepl("^\\?", species) & !grepl(" sp", species) & !grepl("Unidentified", species)
+}
+paste ("Number of species identified to species level:", census %>%
+  filter(filter_species(Seedling_id)) %>%
+  distinct(Seedling_id) %>%
+  nrow())
+paste ("Number of individuals identified to species level:", census %>%
+  filter(filter_species(Seedling_id)) %>%
+  nrow())
+paste ("Proportion of individuals identified to species level:", census %>%
+  filter(filter_species(Seedling_id)) %>%
+  nrow()/nrow(census))
 
 # Number of species recorder per growth form
 data %>%
   filter(Seedling_id != "Unidentified") %>%
-  group_by(Growth_form) %>%
+  group_by(Woody) %>%
   summarise(num_species = n_distinct(Seedling_id))
 
 # Number of individuals per growth form
 data %>%
   filter(Seedling_id != "Unidentified") %>%
-  group_by(Growth_form) %>%
+  group_by(Woody) %>%
   summarise(num_individuals = n())
 ```
 
-**Species counts per site table**
+## 3.2. Table of species counts per site
 
 ```{r}
 # Split in different dataset according to Growth form
@@ -159,79 +276,40 @@ table <- data %>%
 ```
 
 ```{r}
-# Create the table
-table_wide <- list()
-
-for (i in seq_along(table)) {
-  table_wide[[i]] <- subset(table[[i]], select = -Growth_form) %>% # Remove Growth_form
-    table() %>%
-    t() %>%
-    as.data.frame() %>%
-    full_join(plots %>% select(Plot_id, Age), by = "Plot_id") %>% # Merge with the complete dataset, adding missing Plot_id values
-    .[order(.$Age), ] %>%  # Reorder by Age
-    select(-Age) %>%  # Remove the Age column
-    pivot_wider(names_from = Plot_id, values_from = Freq, values_fill = 0) %>% # Wide format
-    na.omit() %>%  # Remove rows with NA in Seedling_id column
-    mutate(total_count = rowSums(select(., -Seedling_id))) # Calculate total_count as the sum of values on each row (excluding Seedling_id)
-    }
+# # Create the table
+# table_wide <- list()
+# 
+# for (i in seq_along(table)) {
+#   table_wide[[i]] <- subset(table[[i]], select = -Growth_form) %>% # Remove Growth_form
+#     table() %>%
+#     t() %>%
+#     as.data.frame() %>%
+#     full_join(plots %>% dplyr::select(Plot_id, Age), by = "Plot_id") %>% # Merge with the complete dataset, adding missing Plot_id values
+#     #.[order(.$Age), ] %>%  # Reorder by Age
+#     dplyr::select(-Age) %>%  # Remove the Age column
+#     pivot_wider(names_from = Plot_id, values_from = Freq, values_fill = 0) %>% # Wide format
+#     na.omit() %>%  # Remove rows with NA in Seedling_id column
+#     mutate(total_count = rowSums(dplyr::select(., -Seedling_id))) # Calculate total_count as the sum of values on each row (excluding Seedling_id)
+#     }
 ```
 
 ```{r}
-# Create a directory to save the Excel files
-dir.create("Species_dataframes", showWarnings = FALSE)
-
-# Loop through each dataframe in table_wide
-for (i in seq_along(table_wide)) {
-  # Generate a file name
-  file_name <- paste0("Species_dataframes/table_wide_", i, ".xlsx")
-  
-  # Write the dataframe to an Excel file
-  write.xlsx(table_wide[[i]], file = file_name)
-}
+# # Create a directory to save the Excel files
+# dir.create("Species_dataframes", showWarnings = FALSE)
+# 
+# # Loop through each dataframe in table_wide
+# for (i in seq_along(table_wide)) {
+#   # Generate a file name
+#   file_name <- paste0("Species_dataframes/table_wide_", i, ".xlsx")
+# 
+#   # Write the dataframe to an Excel file
+#   write.xlsx(table_wide[[i]], file = file_name)
+# }
 ```
 
+# 4. Seed bank abundance
 
-**Prepare ggplot for future visualisation**
-
-```{r}
-# Set global theme options
-theme_set(theme_classic() + theme(panel.border = element_rect(fill=NA)))
-age_palette <- c("#B47435", "#D1B24D", "#A8AF43", "#6A8C3B", "#425F2F", "#1F321A", "grey80")
-growth_form_palette <- c("#CACACA", "#47A7E7", "#EABC34","#84B754")
-rank_abundance_palette <- c("#264653", "#287271", "#2A9D8F", "#8AB17D", "#BABB74", "#E9C46A","#EFB366","#F4A261","#EE8959","#E76F51", "#C65C3E", "#AB3A2F")
-```
-
-**Plots dataset**
-
-```{r}
-# Explore correlation between plots age & latitude/longitude
-
-# Scatter plot for Age vs Latitude
-ggplot(plots, aes(x = Age, y = Latitude_N)) +
-  geom_point() +
-  labs(x = "Age", y = "Latitude")
-
-# Scatter plot for Age vs Longitude
-ggplot(plots, aes(x = Age, y = Longitude_W)) +
-  geom_point() +
-  labs(x = "Age", y = "Longitude")
-
-# Calculation of correlation coefficient
-cor(plots$Age, plots$Latitude_N)
-cor(plots$Age, plots$Longitude_W)
-```
-
-Plots location is tightly related to its age. This stark correlation results from the patterns of deforestation and abandonment in agriculture areas. Indeed, deforestation doesn't occur in a randomly manner, but progressively over the remaining forests and the same is observed with abandonment. This leads to a latitudinal gradient in secondary forest age. This might potentially lead to different patterns of precipitation, wind or nutrient distribution over the chronosequence. However, the different plots are very close to one another and the meteorological variables are likely to be very similar. For the nutrients, this information could be checked. Spatial autocorrelation can be taken into account in the analyses.
-
-**Remove unusefull datasets**
-
-```{r}
-rm(table, table_wide)
-```
-
-# 3. Seed bank abundance
-
-**Raw values of abundance**
+## 4.1. Raw values of abundance
 
 ```{r}
 # Total number of germinating seeds
@@ -240,9 +318,10 @@ total_seeds <- nrow(data)
 # Mean number of individuals & seed density per sample per plot
 seed_density <- data %>%
   filter(Seedling_id != "Unidentified") %>%
+  filter(!Plot_id_census %in% c("EF1", "EF2", "AG1", "AG2")) %>%
   group_by(Plot_id) %>%
   summarise(individuals_plots = n(), # Number of individuals per plot
-            individuals_plots_mean = n()/20, # Mean number of individuals per sample of each plot
+            individuals_plots_mean = n()/8, # Mean number of individuals per sample of each plot
             seed_density_mean = round(individuals_plots_mean*10000/(pi*3^2))) %>% # Mean seed density per sample of each plot (round to whole number)
   mutate(proportion_seeds = round((individuals_plots / sum(total_seeds)) * 100, 1))
 print(seed_density)
@@ -251,65 +330,89 @@ print(seed_density)
 paste0("Overall mean density: ", round(mean(seed_density$seed_density_mean)), " seeds/m^2")
 ```
 
-## 3.1. Abundance per site
+## 4.2. Abundance per sample plot
 
 ```{r}
-# Number of individuals per forest plot
-ggplot(data, aes(x = reorder(Plot_id, Age), fill = as.factor(Age))) +
-  geom_bar(color = "grey10") + 
-  labs(x = "Site name", y = "Number of individuals", fill = "Site age") + 
-  scale_fill_manual(values = age_palette)
-```
-
-The distribution of individuals across different plot age classes is strongly unbalanced. While the agricultural plot and the youngest forests exhibit a high number of individuals, the secondary forest ranging from 50 years, had a very low number of germinating seeds per tray. The stark contrast between 10- and 50-year-old forests suggests a shift in the forest structure. Beyond 50 years, the marked decline in the abundance of germinating seeds is not sustained, as the number of individuals remains stable. We need to partition this into trees, lianas, and herbs to have a better understanding of the community.
-
-## 3.2. Abundance per plot
-
-```{r}
-# Number of individuals per sample plot
-
 # Prepare the dataset
-temp3.2 <- data %>%
+temp1 <- data %>%
   subset(select = c("Sample_id", "Seedling_id")) %>% # Keep only relevant columns
   group_by(Sample_id) %>%
   mutate(Num_individuals = n()) %>% # Count the number of individuals recorder in each tray
   ungroup()
-temp3.2 <- temp3.2 %>%
+temp1 <- temp1 %>%
   distinct(Sample_id, .keep_all = TRUE) %>% # Keep only 1 copy in order not to demultiply the number of copies per sample
   subset(select = -c(Seedling_id)) # Remove unrelevant column
 
 # Merge the complete dataset with the counted data
-temp3.2 <- merge(samples, temp3.2, by = "Sample_id", all.x = TRUE)
+temp1 <- merge(subset(samples, select = -Age), temp1, by = "Sample_id", all.x = TRUE) 
+temp1 <- merge(plots, temp1, by = "Plot_id")
 
 # Replace NA values (where no individuals were recorded) with 0
-temp3.2$Num_individuals[is.na(temp3.2$Num_individuals)] <- 0
+temp1$Num_individuals[is.na(temp1$Num_individuals)] <- 0
 
-ggplot(temp3.2, aes(x = reorder(Plot_id, Age), y = Num_individuals, fill = as.factor(Age))) +
-  geom_boxplot(outlier.shape = NA) + # Remove the outliers as I add the datapoints on top of the boxplot
-  geom_point(position = position_jitter(width = 0.3, height = 0), size = 0.9, color = "black", alpha = 0.7) + # Add jittered data points  
-  labs(x = "Site name", y = "Number of individuals", fill = "Site age") +
-  scale_fill_manual(values = age_palette)
-
-# Not very readable for the old forest plots
-# Let's make two different plots with a different y-scale
+# Let's make two different plots with a different y-scale to make it more readable
 # Create a new categorical variable indicating whether the plot is under or above 40
-temp3.2 <- temp3.2 %>%
+temp1 <- temp1 %>%
   mutate(Age_Group = ifelse(Age <= 10, "1", "2"))
 
-ggplot(temp3.2, aes(x = reorder(Plot_id, Age), y = Num_individuals, fill = as.factor(Age))) +
+ggplot(temp1, aes(x = reorder(Plot_id, Age), y = Num_individuals, fill = as.factor(Age))) +
   geom_boxplot(outlier.shape = NA) +
-  geom_beeswarm(color = "black", alpha = 0.7, size = 1.1) +  # Use geom_beeswarm instead of geom_point
+  geom_beeswarm(color = "black", alpha = 0.7, size = 3) +  # Use geom_beeswarm instead of geom_point
   ggh4x::facet_grid2(. ~ Age_Group, scales = "free", independent = "y", space = "free_x") +
-  theme(strip.text = element_blank()) +
-  labs(x = "Site name", y = "Number of individuals", fill = "Site age") +
+  theme(strip.text = element_blank(), legend.text = element_text(size = 20), legend.title = element_text(size = 20)) +
+  labs(x = "Site name", y = "Number of individuals per sample", fill = "Site age") +
   scale_fill_manual(values = age_palette)
 ```
 
-The secondary forest plots aged over 50 years exhibit notably few individuals per sample, an expected result aligning with the initial observation of a low number of individuals recorded within these plots. However, this graph highlights also the variability between different samples of a same plot.
+```{r}
+# temp3.3.3 <- data %>%
+#   subset(select = c("Sample_id", "Seedling_id", "Woody")) %>% # Keep only relevant columns
+#   filter(Seedling_id != "Unidentified") # Remove "Unidentified" from this plot
+#   
+# # Merge the complete dataset with the counted data
+# temp3.3.3 <- merge(samples, temp3.3.3, by = "Sample_id", all.x = TRUE)
+# head(temp3.3.3)  
+#   
+# # Count the number of seedlings per Sample_id and per Growth_form
+# temp3.3.3 <- temp3.3.3 %>%
+#   group_by(Sample_id, Woody) %>% 
+#   summarise(Seedling_count = n()) %>%
+#   ungroup() %>%
+#   complete(Sample_id, Woody, fill = list(Seedling_count = 0)) # Add 0 when none of a growth form is found in a specific Sample_id
+# head(temp3.3.3)
+# 
+# temp3.3.3 <- temp3.3.3 %>%
+#   distinct(Sample_id, Woody, .keep_all = TRUE) %>% # Keep only 1 copy in order not to demultiply the number of copies per sample
+#   filter(is.na(Woody) == FALSE) # Remove NA values that resulted form the merge between temp3.3.3 & samples
+# head(temp3.3.3)
+# 
+# # Add Plot information
+# temp3.3.3 <- merge(temp3.3.3, samples)
+# head(temp3.3.3)
+# 
+# temp3.3.3 <- temp3.3.3 %>%
+#   filter(Woody!="?")
+# 
+# ggplot(temp3.3.3, aes(x = reorder(Plot_id, Age), y = Seedling_count, fill = Woody)) +
+#   geom_boxplot(outlier.shape = NA) + 
+#   labs(fill = "Woody") +
+#   scale_fill_manual(values = c("#ED7D31","#186782"))
+# 
+# # Not very readable for the old forest plots
+# # Let's make two different plots with a different y-scale
+# # Create a new categorical variable indicating whether the plot is under or above 40
+# temp3.3.3 <- temp3.3.3 %>%
+#   mutate(Age_Group = ifelse(Age <= 10, "1", "2"))
+# 
+# ggplot(temp3.3.3, aes(x = reorder(Plot_id, Age), y = Seedling_count, fill = Woody)) +
+#   geom_boxplot() +
+#   ggh4x::facet_grid2(. ~ Age_Group, scales = "free", independent = "y", space = "free_x") +
+#   theme(strip.text = element_blank()) + 
+#   labs(fill = "Growth form", y = "Number of individuals per sample", x = "Site name") +
+#   scale_fill_manual(values = c("#ED7D31","#186782"))
+```
 
-Possibility of testing the statistical significance of these results. - Should we partition into growth form before? - Is it interesting to do it on the number of individuals, as we know that herbaceous produce a lot more seeds than trees (r strategy)? - Should we group the 2 plots from the same age together? But then we would need to take into account the clustered design of the experiment (all the samples from the same age are divided into two distinct locations).
-
-**Statistical analysis**
+### Statistical analysis: Age & Forest integrity
 
 Here, we have a design with one response variable (number of individuals per trays) and one factor (site age). We might think of an ANOVA to estimate the statistical differences between trays from sites of different ages. However, we have here a clustered structure: samples of the same age are not all independent because they are drawn from two distinct sites. It is therefore better to do a GLMM and taking into account the structure of the data. Conducting an ANOVA on the data while ignoring the clustered structure could lead to incorrect conclusions. GLMMs are better for analyzing clustered data, as they can account for the hierarchical structure of the data by including random effects for the clusters. Generalized linear mixed models (GLMM) are an extension of generalized linear models (GLM) that account for additional structure in dataset. They allow to incorporate random effects (like LMMs) and handle non-normal data, letting errors tale on different distribution families (like GLM).
 
@@ -321,20 +424,67 @@ A random effect is observed when the data only includes a random sample of the f
 # Plot number of individuals distribution
 # Should follow a Poisson's distribution because it is a count
 
-ggplot(temp3.2, aes(x = Num_individuals)) +
-  geom_histogram(fill="grey70", color="grey10", bins = 70) +
-  xlab("Number of individuals") +
-  ylab("Nombre of samples")
-
-print(c(var(temp3.2$Num_individuals), mean(temp3.2$Num_individuals)))
+print(c(var(temp1$Num_individuals), mean(temp1$Num_individuals)))
 ```
 
-Indeed, count data suggests that we should use a Poisson distribution. However, in Poisson's law, var = mean = lamda. Often, the variance increases with the mean much more rapidly than expected under the Poisson distribution… which seems to be the case here.
+Indeed, count data suggests that we should use a Poisson distribution. However, in Poisson's law, var = mean = lamda. Often, the variance increases with the mean much more rapidly than expected under the Poisson distribution… which is the case here.
+
+We need to model a different distribution where the variance increases more rapidly than the mean. We will use a negative binomial (or Poisson-gamma) distribution. The negative binomial distribution meets the assumption that the variance is proportional to the square of the mean.
+
+**Explanatory variables**
 
 ```{r}
-# GLMM using Poisson distribution
-glmm3.2.1 <- glmer(Num_individuals ~ Age + (1 | Plot_id), data = temp3.2, family = "poisson")
-summary(glmm3.2.1)
+# Study correlation
+# Threshold for non too correlated variables : |r|< 0.70
+
+study.correlation <- function (variables){
+  
+  # Computing correlation matrix
+  variables <- variables %>%
+    left_join(select(plots, Plot_id, Age), by = "Plot_id") %>% 
+    select_if(is.numeric) %>%
+    decostand(method = "standardize") %>%
+    rename_with(~ paste0(., "_std"))
+  correlation.matrix <- as.matrix(cor(variables, use = "pairwise.complete.obs")) # use = ... is used to exclude missing values for the corrplot
+  col = colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+  
+  # Plot the correlogram : Visualizing the correlation matrix
+  corrplot(correlation.matrix, method="color", type = "upper", col=col(200), addCoef.col = "black", tl.col="black", tl.srt=45, tl.cex = 1, cl.cex=0.1, addgrid.col = "darkgray",)
+  
+  return(correlation.matrix)
+}
+
+subset_matrix <- study.correlation(explanatory_variables)
+```
+
+```{r}
+# We restrict GLMM to variables that aren't too correlated (threshold: |r| must be < 0.70)
+
+# Create a matrix in order to exclude correlated variables in dredge function
+# Set TRUE for correlations <= 0.7, and FALSE otherwise
+subset_matrix <- subset_matrix <= 0.7
+```
+
+**Models**
+
+```{r}
+# GLMM using negative binomial distribution
+# We use glmer.nb function
+
+global.model <- glmer.nb(Num_individuals ~ Age_std + I(Age_std^2) + Integrity_std + I(Integrity_std^2) + (1 | Plot_id), data = temp1, control = glmerControl(optimizer = "bobyqa"), na.action = na.fail)
+
+dredge(global.model, beta = "none", evaluate = TRUE, rank = "AIC", fixed = NULL, subset = subset_matrix)
+
+glmm_null <- glmer.nb(Num_individuals ~ 1 + (1 | Plot_id), data = temp1, control = glmerControl(optimizer = "bobyqa")) # Control argument specifies the way we optimize the parameter values
+summary(glmm_null)
+glmm_age_1 <- glmer.nb(Num_individuals ~ Age_std + (1 | Plot_id), data = temp1, control = glmerControl(optimizer = "bobyqa")) 
+summary(glmm_age_1)
+glmm_age_2 <- glmer.nb(Num_individuals ~ Age_std + I(Age_std^2) + (1 | Plot_id), data = temp1, control = glmerControl(optimizer = "bobyqa")) 
+summary(glmm_age_2)
+glmm_integrity_1 <- glmer.nb(Num_individuals ~ Integrity_std + (1 | Plot_id), data = temp1, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_integrity_1)
+glmm_integrity_2 <- glmer.nb(Num_individuals ~ Integrity_std + I(Integrity_std^2) + (1 | Plot_id), data = temp1, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_integrity_2)
 ```
 
 ```{r}
@@ -352,36 +502,11 @@ overdisp_fun <- function(model) {
   pval <- pchisq(Pearson.chisq, df=rdf, lower.tail=FALSE,log.p=TRUE)
   c(chisq=Pearson.chisq,ratio=prat,p=exp(pval))
 }
-
-overdisp_fun(glmm3.2.1)
 ```
-
-Ratio is significantly \> 1 (ratio = 5.5, p = 8.0e-147). As expected, we need to model a different distribution where the variance increases more rapidly than the mean. We will use a negative binomial (or Poisson-gamma) distribution. The negative binomial distribution meets the assumption that the variance is proportional to the square of the mean.
-
-```{r}
-# Standardization of Age variable
-# Needed otherwise a model with both Age and I(Age^2) doesn't converge
-temp3.2$Age_std <- decostand(temp3.2$Age, method = "standardize")
-```
-
-```{r}
-# GLMM using negative binomial distribution
-# We use glmer.nb function
-glmm_null <- glmer.nb(Num_individuals ~ 1 + (1 | Plot_id), data = temp3.2, control = glmerControl(optimizer = "bobyqa")) # Control argument specifies the way we optimize the parameter values
-summary(glmm_null)
-
-glmm3.2.2 <- glmer.nb(Num_individuals ~ Age_std + (1 | Plot_id), data = temp3.2, control = glmerControl(optimizer = "bobyqa")) # Control argument specifies the way we optimize the parameter values
-summary(glmm3.2.2)
-
-glmm3.2.3 <- glmer.nb(Num_individuals ~ Age_std + I(Age_std^2) + (1 | Plot_id), data = temp3.2, control = glmerControl(optimizer = "bobyqa")) # Control argument specifies the way we optimize the parameter values
-summary(glmm3.2.3)
-```
-
-We use the \delta AIC in order to rank models according to their fit. The one with quadratic effect is the best.
 
 ```{r}
 # Over/under dispersion check
-overdisp_fun(glmm3.2.3)
+overdisp_fun(glmm_age_2)
 ```
 
 Ratio is much closer to 1 with p way above 0.05. We keep this model. Now, let's do the model diagnostics.
@@ -394,203 +519,364 @@ Model validation:
 
 ```{r}
 # Model validation
-simulationOutput <- simulateResiduals(fittedModel = glmm3.2.3, n = 1000, seed = 123)
+simulationOutput <- simulateResiduals(fittedModel = glmm_age_2, n = 1000, seed = 123)
 plot(simulationOutput)
-testZeroInflation(glmm3.2.3)
 ```
 
-“The test alerts you to the fact that there are some within-group residual distributions that are not uniform, i.e. if you plot your residuals for a specific group (which is the one highlighted in red), they don't look uniform -> deviate significantly from your model assumptions.The test is corrected for multiple testing, so you should assume that this is systematic; nevertheless, given that this is only one group, it seems to me that this is not a major problem, especially given that your data doesn't seem to be particularly large. I would maybe plot the residuals per group, in particular for your red group, to see if there is an obvious problem, missing predictor etc. and if you don't see anything ignore the problem." 
-Source: https://github.com/florianhartig/DHARMa/issues/291
+“The test alerts you to the fact that there are some within-group residual distributions that are not uniform, i.e. if you plot your residuals for a specific group (which is the one highlighted in red), they don't look uniform -\> deviate significantly from your model assumptions.The test is corrected for multiple testing, so you should assume that this is systematic; nevertheless, given that this is only one group, it seems to me that this is not a major problem, especially given that your data doesn't seem to be particularly large. I would maybe plot the residuals per group, in particular for your red group, to see if there is an obvious problem, missing predictor etc. and if you don't see anything ignore the problem." Source: <https://github.com/florianhartig/DHARMa/issues/291>
 
 ```{r}
 # How much variance is explained by the model and the random effect
-r.squaredGLMM(glmm3.2.3) # The help of this function indicates that: "Trigamma-estimate is recommended whenever available".
-r.squaredGLMM(glmm3.2.2)
-```
-Marginal R_GLMM² represents the variance explained by the fixed effects. Conditional R_GLMM² is interpreted as a variance explained by the entire model, including both fixed and random effects.
-The variance explained by the model is 45%, and the Age + Age^2 variable accounts for 39% of this variance. It is good, but there's still great part of it that is not explained by the model. Should we look into other variable?
+# The help of this function indicates that: "Trigamma-estimate is recommended whenever available"
 
-```{r}
-# Predict the effects of the variable
-predict_glmm3.2.2 = ggpredict(glmm3.2.2, "Age_std", back.transform = TRUE)
-predict_glmm3.2.2$x = (predict_glmm3.2.2$x*sd(temp3.2$Age)+mean(temp3.2$Age)) # Because we standardized Age
+r.squaredGLMM(glmm_age_2) 
+r.squaredGLMM(glmm_age_1)
+r.squaredGLMM(glmm_null)
 
-# Deal with the 0 values
-temp3.2_modified <- temp3.2 %>%
-  mutate(Num_individuals = ifelse(Num_individuals == 0, Num_individuals + 0.1, Num_individuals))
-
-# Plot the predicted effect and the real values
-ggplot(predict_glmm3.2.2, aes(x, predicted)) +
-  geom_line(size = 1) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
-  # geom_point(data = temp3.2, position = position_jitter(width = 0, height = 0.05), aes(x = Age, y = Num_individuals), color = "grey40", size = 1) +
-  # geom_point(data = temp3.2_modified, aes(x = Age, y = Num_individuals), color = "grey40", size = 1) + # For 0 values before applying log_scale
-  geom_point(data = temp3.2_modified, position = position_jitter(width = 0, height = 0.05), aes(x = Age, y = Num_individuals, color = as.factor(Age)), size = 2) + # With jitter
-  scale_y_log10() +  # Apply logarithmic scale to y-axis
-  labs(x = "Site Age", y = "Number of individuals") +
-  scale_color_manual(values = age_palette)
-
-# Predict the effects of the variable
-predict_glmm3.2.3 = ggpredict(glmm3.2.3, "Age_std [all]", back.transform = TRUE)
-predict_glmm3.2.3$x = (predict_glmm3.2.3$x*sd(temp3.2$Age)+mean(temp3.2$Age)) # Because we standardized Age
-
-# Deal with the 0 values
-temp3.2_modified <- temp3.2 %>%
-  mutate(Num_individuals = ifelse(Num_individuals == 0, Num_individuals + 0.1, Num_individuals))
-
-# Plot the predicted effect and the real values
-ggplot(predict_glmm3.2.3, aes(x, predicted)) +
-  geom_line(size = 1) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
-  #geom_point(data = temp3.2, position = position_jitter(width = 0, height = 0.05), aes(x = Age, y = Num_individuals), color = "grey40", size = 1) +
-  # geom_point(data = temp3.2_modified, aes(x = Age, y = Num_individuals), color = "grey40", size = 1) + # For 0 values before applying log_scale
-  geom_point(data = temp3.2_modified, position = position_jitter(width = 0, height = 0.05), aes(x = Age, y = Num_individuals, color = as.factor(Age)), size = 2) + # With jitter
-  scale_y_log10() +  # Apply logarithmic scale to y-axis
-  labs(x = "Site Age", y = "Number of individuals") +
-  scale_color_manual(values = age_palette)
+r.squaredGLMM(glmm_integrity_2) 
+r.squaredGLMM(glmm_integrity_1)
 ```
 
-Now let's consider all these information but using the growth form as well.
+```{r}
+# To find where the peak occurs, let's look at the coefficients:
+coef(glmm_age_2)
 
-## 3.3. Accounting for the growth form
+# The maximum probability occurs where the maximum log odds occur, and the formula for log odds is given by these coefficients 
 
-**Number of individuals**
+# dy/dx = -0.8953528 + 2 * 0.6586191 x
+# The only place where dy/dx is 0 is at the maximum point, so we can find the x value
+# So the bottom line is that we can simply get the maximum by doing:
+
+maximum_x <- -coef(glmm_age_2)[2] / (2 * coef(glmm_age_2)[3]) # Standardized
+maximum_x <- maximum_x *sd(temp1$Age)+mean(temp1$Age)
+```
+
+#### Accounting for the growth form
 
 ```{r}
-# Number of individuals per growth form per forest plot
-temp3.3.1 <- data %>%
-  subset(select = c("Seedling_id", "Plot_id", "Growth_form")) %>% # Keep only relevant columns
+# Number of individuals per growth form per forest plot (in fact, lianas, trees & shrubs are grouped together as woody species, whereas herbs are considered as non-woody species)
+temp2 <- data %>%
+  subset(select = c("Seedling_id", "Plot_id", "Woody")) %>% # Keep only relevant columns
   filter(Seedling_id != "Unidentified") %>% # Remove "Unidentified" from this plot
-  group_by(Plot_id, Growth_form) %>% # Count the number of seedlings per Plot_id and per Growth_form
+  group_by(Plot_id, Woody) %>% # Count the number of seedlings per Plot_id and per Growth_form
   summarise(Seedling_count = n()) %>%
   ungroup() %>%
-  complete(Plot_id, Growth_form, fill = list(Seedling_count = 0)) # Add 0 when none of a growth form is found in a specific Plot_id
-head(temp3.3.1)
+  complete(Plot_id, Woody, fill = list(Seedling_count = 0)) # Add 0 when none of a growth form is found in a specific Plot_id
 
 # Add the Age information
-temp3.3.1 <- merge(temp3.3.1, plots)
-head(temp3.3.1)
+temp2 <- merge(temp2, plots)
+head(temp2)
 
 # Plots
-ggplot(temp3.3.1, aes(x = Age, y = Seedling_count, color = Growth_form)) +
-  geom_point() +
-  geom_smooth() +
-  scale_color_manual(values = growth_form_palette) +
-  facet_wrap(~Growth_form, scales = "free") +
-  labs(color = "Growth Form", x = "Site Age", y = "Number of individuals")
+# ggplot(temp2, aes(x = Age, y = Seedling_count, color = Woody)) +
+#   geom_point() +
+#   geom_smooth() +
+#   scale_color_manual(values = growth_form_palette) +
+#   facet_wrap(~Woody, scales = "free") +
+#   labs(color = "Growth Form", x = "Site Age", y = "Number of individuals")
 
 # Create a new categorical variable indicating whether the plot is under or above 40
-temp3.3.1 <- temp3.3.1 %>%
+temp2 <- temp2 %>%
   mutate(Age_Group = ifelse(Age <= 10, "1", "2"))
 
-ggplot(temp3.3.1, aes(x = reorder(Plot_id, Age), y = Seedling_count)) +
-  geom_bar(stat = "identity", aes(fill = Growth_form), position = "dodge", color = "grey10") +
-  ggh4x::facet_grid2(. ~ Age_Group, scales = "free", independent = "y", space = "free_x") +
-  theme(strip.text = element_blank()) +
-  labs(color = "Growth Form", x = "Site name", y = "Number of ndividuals", fill = "Growth form") +
-  scale_fill_manual(values = growth_form_palette)
+# ggplot(temp2, aes(x = reorder(Plot_id, Age), y = Seedling_count)) +
+#   geom_bar(stat = "identity", aes(fill = Woody), position = "dodge", color = "grey10") +
+#   ggh4x::facet_grid2(. ~ Age_Group, scales = "free", independent = "y", space = "free_x") +
+#   theme(strip.text = element_blank()) +
+#   labs(color = "Growth Form", x = "Site name", y = "Number of ndividuals", fill = "Growth form") +
+#   scale_fill_manual(values = growth_form_palette)
 ```
-
-**Relative abundance**
-
-```{r}
-# Calculate total number of individuals per site
-temp3.3.2 <- data %>%
-  filter(Seedling_id != "Unidentified") %>%
-  group_by(Plot_id) %>%
-  summarise(Total_count = n())
-
-# Merge total counts with temp3.3.1
-temp3.3.1 <- temp3.3.1 %>%
-  left_join(temp3.3.2, by = "Plot_id")
-
-# Calculate relative abundance
-temp3.3.1 <- temp3.3.1 %>%
-  mutate(Relative_abundance = (Seedling_count / Total_count) * 100) %>%
-  select(-Total_count)  # Remove the total_count column
-
-# Plots
-ggplot(temp3.3.1, aes(x = Age, y = Relative_abundance, color = Growth_form)) +
-  geom_point() +
-  geom_smooth() +
-  scale_color_manual(values = growth_form_palette) +
-  facet_wrap(~Growth_form, scales = "free") +
-  labs(color = "Growth Form", x = "Site Age", y = "Relative abundance (%)")
-
-# Create a new categorical variable indicating whether the plot is under or above 40
-temp3.3.1 <- temp3.3.1 %>%
-  mutate(Age_Group = ifelse(Age <= 10, "1", "2"))
-
-ggplot(temp3.3.1, aes(x = reorder(Plot_id, Age), y = Relative_abundance)) +
-  geom_bar(stat = "identity", aes(fill = Growth_form), position = "dodge", color = "grey10") +
-  ggh4x::facet_grid2(. ~ Age_Group, scales = "free", independent = "y", space = "free_x") +
-  theme(strip.text = element_blank()) +
-  labs(fill = "Growth Form", x = "Site name", y = "Relative abundance (%)") +
-  scale_fill_manual(values = growth_form_palette)
-```
-
-I think relative abundance is less informative than the previous one. Because if a site has 150 herbs and 50 trees and the other one has 150 herbs and 150 trees, the relative abundance would show very clear differences where in reality trees have produced more seeds but the abundance of herbs hasn't changed. This will be seen in the first plot but not the second.
-
-**At the sample level**
 
 ```{r}
 # Number of individuals per sample plot
-temp3.3.3 <- data %>%
+temp4 <- data %>%
   subset(select = c("Sample_id", "Seedling_id", "Growth_form")) %>% # Keep only relevant columns
   filter(Seedling_id != "Unidentified") # Remove "Unidentified" from this plot
   
 # Merge the complete dataset with the counted data
-temp3.3.3 <- merge(samples, temp3.3.3, by = "Sample_id", all.x = TRUE)
-head(temp3.3.3)  
+temp4 <- merge(samples, temp4, by = "Sample_id", all.x = TRUE)
+head(temp4)  
   
 # Count the number of seedlings per Sample_id and per Growth_form
-temp3.3.3 <- temp3.3.3 %>%
+temp4 <- temp4 %>%
   group_by(Sample_id, Growth_form) %>% 
   summarise(Seedling_count = n()) %>%
   ungroup() %>%
   complete(Sample_id, Growth_form, fill = list(Seedling_count = 0)) # Add 0 when none of a growth form is found in a specific Sample_id
-head(temp3.3.3)
+head(temp4)
 
-temp3.3.3 <- temp3.3.3 %>%
+temp4 <- temp4 %>%
   distinct(Sample_id, Growth_form, .keep_all = TRUE) %>% # Keep only 1 copy in order not to demultiply the number of copies per sample
-  filter(is.na(Growth_form) == FALSE) # Remove NA values that resulted form the merge between temp3.3.3 & samples
-head(temp3.3.3)
+  filter(is.na(Growth_form) == FALSE) # Remove NA values that resulted form the merge between temp4 & samples
+head(temp4)
 
 # Add Plot information
-temp3.3.3 <- merge(temp3.3.3, samples)
-head(temp3.3.3)
-
-ggplot(temp3.3.3, aes(x = reorder(Plot_id, Age), y = Seedling_count, fill = Growth_form)) +
-  geom_boxplot(outlier.shape = NA) + 
-  labs(fill = "Growth Form") +
-  scale_fill_manual(values = growth_form_palette)
-
-# Not very readable for the old forest plots
-# Let's make two different plots with a different y-scale
-# Create a new categorical variable indicating whether the plot is under or above 40
-temp3.3.3 <- temp3.3.3 %>%
-  mutate(Age_Group = ifelse(Age <= 10, "1", "2"))
-
-ggplot(temp3.3.3, aes(x = reorder(Plot_id, Age), y = Seedling_count, fill = Growth_form)) +
-  geom_boxplot() +
-  ggh4x::facet_grid2(. ~ Age_Group, scales = "free", independent = "y", space = "free_x") +
-  theme(strip.text = element_blank()) + 
-  labs(fill = "Growth Form") +
-  scale_fill_manual(values = growth_form_palette)
+temp4 <- merge(temp4, samples)
+head(temp4)
 ```
 
-**Statistical analysis**
-
-Here, we have 3 different issues: - First, we need to run 3 different models, one for each growth form - Second, a lot more samples have a 0 value for a specific growth form, resulting in a zero inflated dataset that would need to be taken into account, and a very few amount of data different from zero for the model - Third, the number of individuals for a specific growth form have a sudden drop (step like function for Herb for instance), which might indicate a nonlinear relationship between the response and the predictor variable. In this case, a GLMM may not capture this sudden drop effectively. Should I use GAM?
+**Woody species**
 
 ```{r}
-# remove datasets that are not of use anymore
-rm(temp3.3.1, temp3.3.2, glmm3.2.1, glmm3.2.2, glmm3.2.3, temp3.2, temp3.2_modified, simulationOutput, temp3.3.3, predict_glmm3.2.2)
+# Subset of the dataset according to the growth form
 ```
 
-# 4. Seed bank alpha diversity
+```{r}
+prepare_dataset <- function(data, woody) {
+  # Keep only relevant columns and count the number of individuals recorded in each tray
+  temp <- data %>%
+    filter(Woody == woody) %>%
+    subset(select = c("Sample_id", "Seedling_id")) %>%
+    group_by(Sample_id) %>%
+    mutate(Num_individuals = n()) %>%
+    ungroup()
+  
+  # Keep only 1 copy per Sample_id
+  temp <- temp %>%
+    distinct(Sample_id, .keep_all = TRUE)
+  
+  # Merge the complete dataset with the counted data
+  temp <- merge(subset(samples, select = -Age), temp, by = "Sample_id", all.x = TRUE)
+  temp <- merge(plots, temp, by = "Plot_id")
+  
+  # Replace NA values with 0
+  temp$Num_individuals[is.na(temp$Num_individuals)] <- 0
+  
+  return(temp)
+}
 
-## 4.1. Rank-abundance of species
+temp_woody <- prepare_dataset(data, "Woody")
+temp_non_woody <- prepare_dataset(data, "Non woody")
+```
+
+**Woody**
+
+```{r}
+# Plot number of individuals distribution
+# Should follow a Poisson's distribution because it is a count
+print(c(var(temp_woody$Num_individuals), mean(temp_woody$Num_individuals)))
+```
+
+```{r}
+# GLMM using negative binomial distribution
+# We use glmer.nb function
+
+global.model.w <- glmer.nb(Num_individuals ~ Age_std + I(Age_std^2) + Integrity_std + I(Integrity_std^2) + (1 | Plot_id), data = temp_woody, control = glmerControl(optimizer = "bobyqa"), na.action = na.fail)
+
+dredge(global.model.w, beta = "none", evaluate = TRUE, rank = "AIC", fixed = NULL, subset = subset_matrix)
+
+glmm_null.w <- glmer.nb(Num_individuals ~ 1 + (1 | Plot_id), data = temp_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_null.w)
+glmm_age_2.w <- glmer.nb(Num_individuals ~ Age_std + I(Age_std^2) + (1 | Plot_id), data = temp_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_age_2.w)
+glmm_age_1.w <- glmer.nb(Num_individuals ~ Age_std + (1 | Plot_id), data = temp_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_age_1.w)
+glmm_integrity_2.w <- glmer.nb(Num_individuals ~ Integrity_std + I(Integrity_std^2) + (1 | Plot_id), data = temp_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_integrity_2.w)
+glmm_integrity_1.w <- glmer.nb(Num_individuals ~ Integrity_std + (1 | Plot_id), data = temp_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_integrity_1.w)
+```
+
+```{r}
+# Over/under dispersion check
+overdisp_fun(glmm_age_1.w)
+```
+
+```{r}
+# Model validation
+simulationOutput <- simulateResiduals(fittedModel = glmm_age_1.w, n = 1000, seed = 123)
+plot(simulationOutput)
+```
+
+```{r}
+# How much variance is explained by the model and the random effect
+r.squaredGLMM(glmm_age_2.w)
+r.squaredGLMM(glmm_age_1.w)
+r.squaredGLMM(glmm_null.w)
+
+r.squaredGLMM(glmm_integrity_2.w)
+r.squaredGLMM(glmm_integrity_1.w)
+```
+
+**Non woody**
+
+```{r}
+# Plot number of individuals distribution
+# Should follow a Poisson's distribution because it is a count
+print(c(var(temp_non_woody$Num_individuals), mean(temp_non_woody$Num_individuals)))
+```
+
+```{r}
+# GLMM using negative binomial distribution
+# We use glmer.nb function
+
+global.model.nw <- glmer.nb(Num_individuals ~ Age_std + I(Age_std^2) + Integrity_std + I(Integrity_std^2) + (1 | Plot_id), data = temp_non_woody, control = glmerControl(optimizer = "bobyqa"), na.action = na.fail)
+dredge(global.model.nw, beta = "none", evaluate = TRUE, rank = "AIC", fixed = NULL, subset = subset_matrix)
+
+glmm_null.nw <- glmer.nb(Num_individuals ~ 1 + (1 | Plot_id), data = temp_non_woody, control = glmerControl(optimizer = "bobyqa"))
+glmm_age_1.nw <- glmer.nb(Num_individuals ~ Age_std + (1 | Plot_id), data = temp_non_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_age_1.nw)
+glmm_age_2.nw <- glmer.nb(Num_individuals ~ Age_std + I(Age_std^2) + (1 | Plot_id), data = temp_non_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_age_2.nw)
+glmm_integrity_1.nw <- glmer.nb(Num_individuals ~ Integrity_std + (1 | Plot_id), data = temp_non_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_integrity_1.nw)
+glmm_integrity_2.nw <- glmer.nb(Num_individuals ~ Integrity_std + I(Integrity_std^2) + (1 | Plot_id), data = temp_non_woody, control = glmerControl(optimizer = "bobyqa"))
+summary(glmm_integrity_2.nw)
+```
+
+```{r}
+# Over/under dispersion check
+overdisp_fun(glmm_age_1.nw)
+```
+
+```{r}
+# Model validation
+simulationOutput <- simulateResiduals(fittedModel = glmm_age_2.nw, n = 1000, seed = 123)
+plot(simulationOutput)
+```
+
+```{r}
+# How much variance is explained by the model and the random effect
+r.squaredGLMM(glmm_age_2.nw)
+r.squaredGLMM(glmm_age_1.nw)
+r.squaredGLMM(glmm_null.nw)
+r.squaredGLMM(glmm_integrity_2.nw)
+r.squaredGLMM(glmm_integrity_1.nw)
+```
+
+**Plot the best models predictions**
+
+```{r}
+# Predict: total model
+predict_glmm_age_2 <- ggpredict(glmm_age_2, terms = "Age_std [-1.52:1.52 by=0.001]", back.transform = TRUE, replace = TRUE)
+# predict_glmm_age_2 <- ggpredict(glmm_age_2, "Age_std [all]", back.transform = TRUE)
+predict_glmm_age_2$x = (predict_glmm_age_2$x*sd(temp1$Age)+mean(temp1$Age)) # Because we standardized Age
+
+# Predict: woody model
+predict_glmm_age_1.w = ggpredict(glmm_age_1.w, terms = "Age_std [-1.52:1.52 by=0.001]",  back.transform = TRUE)
+predict_glmm_age_1.w$x = (predict_glmm_age_1.w$x*sd(temp1$Age)+mean(temp1$Age)) # Because we standardized Age
+
+# Predict: non-woody model
+predict_glmm_age_2.nw = ggpredict(glmm_age_2.nw, terms = "Age_std [-1.52:1.52 by=0.001]", back.transform = TRUE)
+predict_glmm_age_2.nw$x = (predict_glmm_age_2.nw$x*sd(temp1$Age)+mean(temp1$Age)) # Because we standardized Age
+```
+
+```{r}
+# Plot woody, Non woody and all together
+temp1_m <- temp1 %>%
+  mutate(Num_individuals = ifelse(Num_individuals == 0, Num_individuals + 0.1, Num_individuals))
+temp_woody_m <- temp_woody %>%
+  mutate(Num_individuals = ifelse(Num_individuals == 0, Num_individuals + 0.1, Num_individuals))
+temp_non_woody_m <- temp_non_woody %>%
+  mutate(Num_individuals = ifelse(Num_individuals == 0, Num_individuals + 0.1, Num_individuals))
+
+plot_predict_age <- ggplot() +
+  # Add the first geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glmm_age_2, aes(x = x, y = predicted, color = "Woody + Non woody"), size = 2) +
+  geom_ribbon(data = predict_glmm_age_2, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Woody + Non woody"), alpha = 0.2) +
+  # Add the second geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glmm_age_1.w, aes(x = x, y = predicted, color = "Woody"), size = 2) +
+  geom_ribbon(data = predict_glmm_age_1.w, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Woody"), alpha = 0.2) +
+  # Add the third geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glmm_age_2.nw, aes(x = x, y = predicted, color = "Non woody"), size = 2) +
+  geom_ribbon(data = predict_glmm_age_2.nw, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Non woody"), alpha = 0.2) +
+  # Add points
+  geom_point(data = temp_woody_m, aes(x = Age, y = Num_individuals, color = "Woody"), size = 4.5, position = position_nudge(x = -0.7), alpha = 0.3) +
+  geom_point(data = temp1_m, aes(x = Age, y = Num_individuals, color = "grey"), size = 4.5, alpha = 0.3) +
+  geom_point(data = temp_non_woody_m, aes(x = Age, y = Num_individuals, color = "Non woody"), size = 4.5, position = position_nudge(x = 0.7), alpha = 0.3) +
+  # Apply logarithmic scale to y-axis
+  scale_y_log10(limits = c(0.1, 250), breaks = c(1, 10, 100)) +
+  # Set x lim
+  xlim(-1, 131) +
+  # Set labels
+  labs(x = "Site Age", y = "Number of individuals") +
+  # Define the color palette for lines and ribbons
+  scale_color_manual(name = "Model", values = model_palette) +
+  scale_fill_manual(name = "Model", values = model_palette) + 
+  theme(legend.text = element_text(size = 20), legend.title = element_text(size = 20), legend.position = "none")
+```
+
+```{r}
+# Predict: total model
+predict_glmm_integrity_2 <- ggpredict(glmm_integrity_2, terms = "Integrity_std [-3:1 by=0.001]", back.transform = TRUE, replace = TRUE)
+predict_glmm_integrity_2$x = (predict_glmm_integrity_2$x*sd(temp1$Integrity)+mean(temp1$Integrity)) # Because we standardized Integrity
+
+# Predict: woody model
+predict_glmm_integrity_2.w = ggpredict(glmm_integrity_2.w, terms = "Integrity_std [-3:1 by=0.001]",  back.transform = TRUE)
+predict_glmm_integrity_2.w$x = (predict_glmm_integrity_2.w$x*sd(temp1$Integrity)+mean(temp2$Integrity)) # Because we standardized Integrity
+
+# Predict: non-woody model
+predict_glmm_integrity_2.nw = ggpredict(glmm_integrity_2.nw, terms = "Integrity_std [-3:1 by=0.001]", back.transform = TRUE)
+predict_glmm_integrity_2.nw$x = (predict_glmm_integrity_2.nw$x*sd(temp1$Integrity)+mean(temp1$Integrity)) # Because we standardized Integrity
+```
+
+```{r}
+# Plot woody, Non woody and all together
+temp1_m <- temp1 %>%
+  mutate(Num_individuals = ifelse(Num_individuals == 0, Num_individuals + 0.1, Num_individuals))
+temp_woody_m <- temp_woody %>%
+  mutate(Num_individuals = ifelse(Num_individuals == 0, Num_individuals + 0.1, Num_individuals))
+temp_non_woody_m <- temp_non_woody %>%
+  mutate(Num_individuals = ifelse(Num_individuals == 0, Num_individuals + 0.1, Num_individuals))
+
+plot_predict_integrity <- ggplot() +
+  # Add the first geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glmm_integrity_2, aes(x = x, y = predicted, color = "Woody + Non woody"), size = 2) +
+  geom_ribbon(data = predict_glmm_integrity_2, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Woody + Non woody"), alpha = 0.2) +
+  # Add the second geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glmm_integrity_2.w, aes(x = x, y = predicted, color = "Woody"), size = 2) +
+  geom_ribbon(data = predict_glmm_integrity_2.w, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Woody"), alpha = 0.2) +
+  # Add the third geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glmm_integrity_2.nw, aes(x = x, y = predicted, color = "Non woody"), size = 2) +
+  geom_ribbon(data = predict_glmm_integrity_2.nw, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Non woody"), alpha = 0.2) +
+  # Add points
+  geom_point(data = temp_woody_m, aes(x = Integrity, y = Num_individuals, color = "Woody"), size = 4.5, position = position_nudge(x = -0.1), alpha = 0.3) +
+  geom_point(data = temp1_m, aes(x = Integrity, y = Num_individuals, color = "grey"), size = 4.5, alpha = 0.3) +
+  geom_point(data = temp_non_woody_m, aes(x = Integrity, y = Num_individuals, color = "Non woody"), size = 4.5, position = position_nudge(x = 0.1), alpha = 0.3) +
+  # Apply logarithmic scale to y-axis
+  # Set x lim
+  xlim(-0.1, 10.1) +
+  scale_y_log10(limits = c(0.1, 250), breaks = c(1, 10, 100)) +
+  # Set labels
+  labs(x = "Site Integrity", y = "Number of individuals") +
+  # Define the color palette for lines and ribbons
+  scale_color_manual(name = "Model", values = model_palette) +
+  scale_fill_manual(name = "Model", values = model_palette) + 
+  theme(legend.text = element_text(size = 20), legend.title = element_text(size = 20), legend.position = "none")
+
+grid.arrange(plot_predict_age, plot_predict_integrity, ncol = 2)  # Side by side
+```
+
+### Statistical analysis: older-regrowth forests only
+
+```{r}
+# Prepare datasets
+
+# data restricted to older-regrowth forests only
+temp1 <- temp1 %>%
+  filter(Age>=50) 
+temp_woody <- temp_woody %>%
+  filter(Age>=50) 
+temp_non_woody <- temp_non_woody %>%
+  filter(Age>=50) 
+```
+
+```{r}
+global.model = glmer.nb(Num_individuals ~ Nitrogen_std + Phosphorus_std + MeanSlope_std + Age_std + I(Age_std^2) + Integrity_std + I(Integrity_std^2) + (1 | Plot_id), family = poisson, data = temp1, control = glmerControl(optimizer = "bobyqa"), na.action = na.fail)
+dredge(global.model, beta = "sd", evaluate = TRUE,rank = "AICc", fixed = NULL, subset = subset_matrix, m.max = 3)
+
+# Woody species
+global.model = glmer.nb(Num_individuals ~ Nitrogen_std + Phosphorus_std + MeanSlope_std + Age_std + I(Age_std^2) + Integrity_std + I(Integrity_std^2) + (1 | Plot_id), family = poisson, data = temp_woody, control = glmerControl(optimizer = "bobyqa"), na.action = na.fail)
+dredge(global.model.w, beta = "sd", evaluate = TRUE,rank = "AICc", fixed = NULL, subset = subset_matrix, m.max = 3)
+
+# Non woody species
+global.model = glmer.nb(Num_individuals ~ Nitrogen_std + Phosphorus_std + MeanSlope_std + Age_std + I(Age_std^2) + Integrity_std + I(Integrity_std^2) + (1 | Plot_id), family = poisson, data = temp_non_woody, control = glmerControl(optimizer = "bobyqa"), na.action = na.fail)
+dredge(global.model.nw, beta = "sd", evaluate = TRUE,rank = "AICc", fixed = NULL, subset = subset_matrix, m.max = 3)
+```
+
+# 5. Seed bank alpha diversity
+
+## 5.1. Species rank-abundance
 
 **Rank-abundance plot**
 
@@ -600,11 +886,56 @@ temp4.1.1 <- census %>%
   count(Seedling_id, name = "Total_count")
 head(temp4.1.1)
 
+# Create the mapping as a named vector
+species_mapping <- c(
+  "? (M?)" = "Morphospecies 1",
+  "? (M17)" = "Morphospecies 2",
+  "? (MA12)" = "Morphospecies 3",
+  "? (MA18)" = "Morphospecies 4",
+  "? (MA22)" = "Morphospecies 5",
+  "? (MA27)" = "Morphospecies 6",
+  "? (MA9)" = "Morphospecies 7",
+  "? (M14)" = "Morphospecies 8",
+  "? (M19)" = "Morphospecies 9",
+  "? (M21)" = "Morphospecies 10",
+  "? (M9)" = "Morphospecies 11",
+  "? (MA13)" = "Morphospecies 12",
+  "? (MA17)" = "Morphospecies 13",
+  "? (MA26)" = "Morphospecies 14",
+  "? (MA38)" = "Morphospecies 15",
+  "? (MA42)" = "Morphospecies 16",
+  "? (MA46)" = "Morphospecies 17",
+  "? (MA5)" = "Morphospecies 18",
+  "? (MA51)" = "Morphospecies 19",
+  "? (MA54)" = "Morphospecies 20",
+  "? (M26)" = "Morphospecies 21",
+  "? (M3)" = "Morphospecies 22",
+  "? (MA21)" = "Morphospecies 23",
+  "? (MA29)" = "Morphospecies 24",
+  "? (MA30)" = "Morphospecies 25",
+  "? (MA31)" = "Morphospecies 26",
+  "? (MA33)" = "Morphospecies 27",
+  "? (MA35)" = "Morphospecies 28",
+  "? (MA36)" = "Morphospecies 29",
+  "? (MA37)" = "Morphospecies 30",
+  "? (MA45)" = "Morphospecies 31",
+  "? (MA48)" = "Morphospecies 32",
+  "? (MA50)" = "Morphospecies 33",
+  "? (MA7)" = "Morphospecies 34"
+)
+
+# Update the Seedling_id column using the mapping
+temp4.1.1 <- temp4.1.1 %>%
+  mutate(Seedling_id = recode(Seedling_id, !!!species_mapping))
+
 # Count the number of unique plots for each species
 temp4.1.2 <- data %>%
   group_by(Seedling_id) %>%
   summarise(Num_Plots = n_distinct(Plot_id))
 head(temp4.1.2)
+
+temp4.1.2 <- temp4.1.2 %>%
+  mutate(Seedling_id = recode(Seedling_id, !!!species_mapping))
 
 # Merge the two datasets together
 temp4.1.1 <- merge(temp4.1.1, temp4.1.2)
@@ -617,20 +948,23 @@ temp4.1.1 <- temp4.1.1 %>%
 temp4.1.1 <- temp4.1.1 %>%
   filter(Seedling_id != "Unidentified")
 
-# Create the bar plot
+# Rank species based on Relative_abundance
+temp4.1.1 <- temp4.1.1 %>%
+  arrange(Relative_abundance) %>%
+  mutate(Abundance_Category = ifelse(row_number() <= 40, "B", "A"))
+
+# Create the plot
 ggplot(temp4.1.1, aes(x = reorder(Seedling_id, -Relative_abundance), y = Relative_abundance, fill = as.factor(Num_Plots))) +
-  geom_bar(stat = "identity", color = "grey10") +
-  labs(x = "Species", y = "Relative Abundance (%)", fill = "Number of Plots") +
+  geom_bar(stat = "identity", color = "grey10", fill = "grey80") +
+  labs(x = "Species", y = "Relative Abundance (%)", fill = "Number of sites") +
   theme_classic() + 
-  theme(panel.border = element_rect(fill=NA)) +
-  theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust = 1, color = "black")) +
-  scale_fill_manual(values = rank_abundance_palette)
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = -0.001), legend.position = 'none') +
+  facet_wrap(~ Abundance_Category, scales = "free_x", ncol = 1) +
+  theme(strip.background = element_blank(),strip.text = element_blank())
 
 # remove datasets that are not of use anymore
-rm(temp4.1.1, temp4.1.2)
+#rm(temp4.1.1, temp4.1.2)
 ```
-
-Have to keep in mind that it is not the final dataset and that things might certainely change (species are here somehow duplicate because of the "uncertainety tag" that I add on some of the individuals, waiting for confirmation). However, we see that a few species are abundant whereas most of them are very rare, or only recorded once in the study. We therefore have a very long tail of rare species. Seems to have the same result without the duplication but still, it's not the final dataset.
 
 **Investigating singletons and doubletons**
 
@@ -640,6 +974,7 @@ species_counts <- table(census$Seedling_id)
 
 # Identify species occurring only once or twice
 rare_species <- names(species_counts[species_counts <= 2])
+abundant_species <- names(species_counts[species_counts >= 10])
 
 # Print the number and IDs of rare species
 cat("Number of rare species (occurring once or twice):", length(rare_species), "\n")
@@ -647,7 +982,7 @@ cat("Proportion of rare species (occurring once or twice) (%):", length(rare_spe
 cat("IDs of rare species:", rare_species, "\n")
 ```
 
-## 4.2. Species accumulation curve
+## 5.2. Species accumulation curve
 
 Species accumulation curves are used to estimate the number of species in a particular area. They indicate the proportion censused of the existing species of an area.
 
@@ -661,18 +996,19 @@ Species accumulation curve will be needed to compare species richness between si
 # Format data beforehand
 
 # Count the abundance of each species within each sample
-temp4.2.1 <- data %>%
+temp4.2.1 <- subset(data) %>%
   filter(Seedling_id != "Unidentified") %>% # Remove "Unidentified" from this plot
   group_by(Sample_id, Seedling_id) %>%
   summarise(Abundance = n()) %>%
   ungroup()
 
 # Merge the complete dataset with this dataset to have every sample
-temp4.2.1 <- merge(samples, temp4.2.1, by = "Sample_id", all.x = TRUE)
+temp4.2.1 <- merge(subset(samples, select = -c(Plot_id, Age)), temp4.2.1, by = "Sample_id", all.x = TRUE)
+temp4.2.1[is.na(temp4.2.1)] <- 0
 
 # Reshape the data to wide format
 temp4.2.1_wide <- spread(temp4.2.1, Seedling_id, Abundance, fill = 0)
-temp4.2.1_wide <- temp4.2.1_wide[, !(names(temp4.2.1_wide) %in% c("<NA>", "Plot_id", "Age"))] # Remove the columns created because of the merge with samples dataframe
+temp4.2.1_wide <- temp4.2.1_wide[, !(names(temp4.2.1_wide) %in% c("<NA>"))] # Remove the columns created because of the merge with samples dataframe
 
 # Set the Sample_id column as row names
 rownames(temp4.2.1_wide) <- temp4.2.1_wide$Sample_id
@@ -682,7 +1018,10 @@ temp4.2.1_wide$Sample_id <- NULL
 ```
 
 ```{r}
-accum4.2.1 <- accumcomp(temp4.2.1_wide, samples, factor ='Plot_id', method='exact', plotit=FALSE, conditioned = FALSE, permutations = 100)
+samples <- samples %>%
+  arrange(Sample_id)
+
+accum4.2.1 <- accumcomp(x = temp4.2.1_wide, y = samples, factor ='Plot_id', method='exact', conditioned = FALSE, plotit = FALSE, permutations = 100)
 head(accum4.2.1)
 
 accum.4.2.2 <- accumcomp.long(accum4.2.1, ci=NA, label.freq=5) %>% 
@@ -697,20 +1036,15 @@ head(accum.4.2.2)
 
 ```{r}
 label_data <- accum.4.2.2[accum.4.2.2$Obs == 20, ]
-label_data$Richness <- c(13, 10.3, 5.2, 7.3, 8, 9.8, 4.8, 3.8, 6, 6.7, 7, 4.2)
 
 # Plot accumulation curve
 ggplot(data=accum.4.2.2, aes(x = Sites, y = Richness)) + 
-  geom_line(aes(group = Plot_id, color = as.factor(Age)), size=1) +
-  geom_text(data = label_data, aes(label = Plot_id, color = as.factor(Age)), hjust = -0.2, size = 3, fontface = "bold") +
+  geom_line(aes(group = Plot_id, color = Plot_id), size=2) +
   xlim(1, 21) +  # Set the x-axis limits
-  labs(x = "Number of samples", y = "Number of species", color = "Site age") +
-  scale_color_manual(values = age_palette)
+  labs(x = "Number of samples", y = "Number of species detected", color = "Site Age")
 ```
 
-Overall, we see that the species richness in our data is underestimated, the curve is, after 20 samples still far from being flat. It is especially true for SAI or POA.
-
-## 4.3. Estimated species richness per site
+## 5.3. Estimated species richness
 
 ```{r}
 plot_names <- unique(sub("\\..*", "", rownames(temp4.2.1_wide)))
@@ -721,7 +1055,7 @@ temp4.3.1 <- lapply(plot_names, function(plot_name) {
 # Apply specpool() to each dataframe in temp4.3.1
 temp4.3.2 <- lapply(temp4.3.1, function(df) {
   specpool_result <- specpool(df) %>%
-    round(1) # Round to have integers for the estimated number of species
+    round(1)
   specpool_result$Plot_id_census <- unique(sub("\\..*", "", rownames(df)))
   return(specpool_result)
 })
@@ -730,20 +1064,16 @@ temp4.3.3 <- bind_rows(temp4.3.2) # Combine the results into one dataframe
 print(temp4.3.3)
 ```
 
-We have different species richness indicators: Chao, Jackknife (first order), Jacknife (second order) and bootstrap methods. 
-According to https://www.cambridge.org/core/journals/parasitology/article/comparative-performance-of-species-richness-estimation-methods/9A552EA65E05D01214D5B00B83A824EA, Chao and Jackknife 1 perform best and Jackknife is the best one with low sampling effort, while bootstrap is more accurate with increasing sampling effort.
-According to https://www.nature.com/articles/s41559-021-01513-0, they used Jackknife 1 because it was the best. 
-Here https://www.researchgate.net/publication/299654201_Basic_Theoretical_Arguments_Advocating_Jackknife-2_as_Usually_being_the_Most_Appropriate_Nonparametric_Estimator_of_Total_Species_Richness, someone says Jackknife 2 is best. 
-Chao shows a very high uncertainty on the value in our dataset.
+We have different species richness indicators: Chao, Jackknife (first order), Jacknife (second order) and bootstrap methods. According to <https://www.cambridge.org/core/journals/parasitology/article/comparative-performance-of-species-richness-estimation-methods/9A552EA65E05D01214D5B00B83A824EA>, Chao and Jackknife 1 perform best and Jackknife is the best one with low sampling effort, while bootstrap is more accurate with increasing sampling effort. According to <https://www.nature.com/articles/s41559-021-01513-0>, they used Jackknife 1 because it was the best. Here <https://www.researchgate.net/publication/299654201_Basic_Theoretical_Arguments_Advocating_Jackknife-2_as_Usually_being_the_Most_Appropriate_Nonparametric_Estimator_of_Total_Species_Richness>, someone says Jackknife 2 is best. Chao shows a very high uncertainty on the value in our dataset.
 
-We can use the species accumulation curves (SACs) to assess our inventory completeness. 
+We can use the species accumulation curves (SACs) to assess our inventory completeness.
 
 ```{r}
-# # Generate a file name
-# file_name <- "Species_dataframes/estimated_richness.xlsx"
-#   
-# # Write the dataframe to an Excel file
-# write.xlsx(temp4.3.3, file = file_name)
+# Generate a file name
+file_name <- "Species_dataframes/estimated_richness.xlsx"
+
+# Write the dataframe to an Excel file
+# write.xlsx(temp4.3.3, file = "Species_dataframes/estimated_richness.xlsx")
 ```
 
 ```{r}
@@ -754,141 +1084,454 @@ temp2.4 <- data %>%
   summarise(num_species = n_distinct(Seedling_id))
 temp2.4 <- merge(temp2.4, plots) # Get the Age column back in the species_count_plot tibble
 temp2.4 <- merge(temp2.4, temp4.3.3)
-
-# temp2.4 <- data %>%
-#   filter(Seedling_id != "Unidentified") %>% # Remove "Unidentified" from this plot
-#   group_by(Sample_id) %>%
-#   summarise(num_species = n_distinct(Seedling_id))
-# temp2.4 <- merge(temp2.4, samples,by = "Sample_id", all.x = TRUE) # Get the Age column back in the species_count_plot tibble
-# 
-# ggplot(temp2.4, aes(y = num_species, x = reorder(Plot_id, Age))) +
-#   geom_boxplot(aes(fill = as.factor(Age))) + 
-#   labs(x = "Plot", y = "Number of Species", fill = "Site Age") +
-#   scale_fill_manual(values = age_palette)
-
-ggplot() +
-  geom_col(data = temp2.4, aes(x = reorder(Plot_id, Age), y = chao, fill = "grey80"), color = "grey10") +
-  geom_col(data = temp2.4, aes(x = reorder(Plot_id, Age), y = num_species, fill = as.factor(Age)), color = "grey10") +
-  labs(x = "Plot", y = "Number of Species", fill = "Site Age") +
-  scale_fill_manual(values = age_palette)
-
-ggplot() +
-  geom_col(data = temp2.4, aes(x = reorder(Plot_id, Age), y = jack1, fill = "grey80"), color = "grey10") +
-  geom_col(data = temp2.4, aes(x = reorder(Plot_id, Age), y = num_species, fill = as.factor(Age)), color = "grey10") +
-  labs(x = "Plot", y = "Number of Species", fill = "Site Age") +
-  scale_fill_manual(values = age_palette)
-
-ggplot() +
-  geom_col(data = temp2.4, aes(x = reorder(Plot_id, Age), y = jack2, fill = "grey80"), color = "grey10") +
-  geom_col(data = temp2.4, aes(x = reorder(Plot_id, Age), y = num_species, fill = as.factor(Age)), color = "grey10") +
-  labs(x = "Plot", y = "Number of Species", fill = "Site Age") +
-  scale_fill_manual(values = age_palette)
-
-ggplot() +
-  geom_col(data = temp2.4, aes(x = reorder(Plot_id, Age), y = boot, fill = "grey80"), color = "grey10") +
-  geom_col(data = temp2.4, aes(x = reorder(Plot_id, Age), y = num_species, fill = as.factor(Age)), color = "grey10") +
-  labs(x = "Plot", y = "Number of Species", fill = "Site Age") +
-  scale_fill_manual(values = age_palette)
 ```
 
-Interesting result: the number of species in the seed bank decreases with the age of the forest plot. Needs to be confirmed with the final dataset. Could we compare this with the actual standing vegetation where it's probably the opposite? (We don't have data for the agricultural plots though...). This could be due to our protocol: in only 6 weeks, we will tend to have more fast growing species and less long-term germinating ones. Bias in the data that we try to correct by continuing the census, but eventually some species will take far longer to germinate. Creates a bias in the growth form that we tend to detect because herbs are fast germinating species whereas tree species are not. That could explain this result, why in older secondary forest, we tend to have less species. Also, the fact that herbs are much more abundant means that they are easier to detect. The probability of detecting these species is much higher than the tree species whose seedlings might be much less abundant. Therefore, the detection rate in agricultural sites and ecoforests might be much higher than the one in older forest plots.
-
-Seed ecology: early succession species tend to be more persistent in the seed bank and travel over long distances, whereas late succession species germinate very quickly, sometimes even before getting on the soil. In the seed bank, we therefore tend to see more early succession species.
-
-Another reason could be the heterogeneity of the soil seed bank in older forests: we won't sample every species, only a small subset. This is corrected and accounted for by the accumulation curve.
-
-Have to keep in mind that the seed bank is only a subset of the standing vegetation, and that our sample is only a subset of the seed bank...
-
-**Statistical analysis**
+## 5.4. Statistical analysis
 
 ```{r}
 # Should follow a Poisson's distribution because it is a count
-print(c(var(temp2.4$num_species), mean(temp2.4$num_species)))
+print(c(var(temp2.4$Species), mean(temp2.4$Species)))
 ```
 
-We should use a Poisson distribution as var = mean. However, dispersion tests showed a very strong deviation from the Poisson's law. We therefore use a quasipoisson and the QQplot looks way better.
+We should not use a Poisson distribution as, dispersion tests showed a very strong deviation from the Poisson's law. We therefore use a negative binomial and the QQplot looks way better.
 
 ```{r}
-# GLMM using Poisson distribution
-glm4.2.1 <- glm(num_species ~ Age, data = temp2.4, family = "quasipoisson")
-summary(glm4.2.1)
+# GLM using negative binomial distribution
 
-##############################
-library(MASS)
-glm4.2.1 <- glm.nb(boot ~ Age, data = temp2.4)
-summary(glm4.2.1)
-##############################
+# Num_species
+global.model.num <- glm.nb(Species ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4, na.action = na.fail)
+dredge(global.model.num, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
 
-glm4.2.2 <- glm(chao ~ Age, data = temp2.4, family = "quasipoisson")
-summary(glm4.2.2)
+glm_age_2_num <- glm.nb(Species ~ Age + I(Age^2), data = temp2.4)
+summary(glm_age_2_num)
+glm_age_1_num <- glm.nb(Species ~ Age, data = temp2.4)
+summary(glm_age_1_num)
+glm_null_num <- glm.nb(Species ~ 1, data = temp2.4)
+summary(glm_null_num)
+glm_integrity_2_num <- glm.nb(Species ~ Integrity + I(Integrity^2), data = temp2.4)
+summary(glm_integrity_2_num)
+glm_integrity_1_num <- glm.nb(Species ~ Integrity, data = temp2.4)
+summary(glm_integrity_1_num)
 
-glm4.2.3 <- glm(jack1 ~ Age, data = temp2.4, family = "quasipoisson")
-summary(glm4.2.3)
+# Chao
+global.model.chao <- glm.nb(chao ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4, na.action = na.fail)
+dredge(global.model.chao, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
 
-glm4.2.4 <- glm(jack2 ~ Age, data = temp2.4, family = "quasipoisson")
-summary(glm4.2.4)
+glm_age_2_chao <- glm.nb(chao ~ Age + I(Age^2), data = temp2.4)
+summary(glm_age_2_chao)
+glm_age_1_chao <- glm.nb(chao ~ Age, data = temp2.4)
+summary(glm_age_1_chao)
+glm_null_chao <- glm.nb(chao ~ 1, data = temp2.4)
+summary(glm_null_chao)
+glm_integrity_2_chao <- glm.nb(chao ~ Integrity + I(Integrity^2), data = temp2.4)
+summary(glm_integrity_2_chao)
+glm_integrity_1_chao <- glm.nb(chao ~ Integrity, data = temp2.4)
+summary(glm_integrity_1_chao)
 
-glm4.2.5 <- glm(boot ~ Age, data = temp2.4, family = "quasipoisson")
-summary(glm4.2.5)
+# Jackknife 2
+global.model.jack2 <- glm.nb(jack2 ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4, na.action = na.fail)
+dredge(global.model.jack2, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_jack2 <- glm.nb(jack2 ~ Age + I(Age^2), data = temp2.4)
+summary(glm_age_2_jack2)
+glm_age_1_jack2 <- glm.nb(jack2 ~ Age, data = temp2.4)
+summary(glm_age_1_jack2)
+glm_null_jack2 <- glm.nb(jack2 ~ 1, data = temp2.4)
+summary(glm_null_jack2)
+glm_integrity_2_jack2 <- glm.nb(jack2 ~ Integrity + I(Integrity^2), data = temp2.4)
+summary(glm_integrity_2_jack2)
+glm_integrity_1_jack2 <- glm.nb(jack2 ~ Integrity, data = temp2.4)
+summary(glm_integrity_1_jack2)
+
+# Bootstrap
+global.model.boot <- glm.nb(boot ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4, na.action = na.fail)
+dredge(global.model.boot, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_boot <- glm.nb(boot ~ Age + I(Age^2), data = temp2.4)
+summary(glm_age_2_boot)
+glm_age_1_boot <- glm.nb(boot ~ Age, data = temp2.4)
+summary(glm_age_1_boot)
+glm_null_boot <- glm.nb(boot ~ 1, data = temp2.4)
+summary(glm_null_boot)
+glm_integrity_2_boot <- glm.nb(boot ~ Integrity + I(Integrity^2), data = temp2.4)
+summary(glm_age_2_boot)
+glm_integrity_1_boot <- glm.nb(boot ~ Integrity, data = temp2.4)
+summary(glm_age_1_boot)
 ```
 
-Despite having very few data points (12), we have a significant effect of site age on the (estimated) species richness.
+```{r}
+r.squaredGLMM(glm_age_2_num)
+r.squaredGLMM(glm_age_1_num)
+r.squaredGLMM(glm_null_num)
+r.squaredGLMM(glm_age_2_chao)
+r.squaredGLMM(glm_age_1_chao)
+r.squaredGLMM(glm_null_chao)
+r.squaredGLMM(glm_age_2_boot)
+r.squaredGLMM(glm_age_1_boot)
+r.squaredGLMM(glm_null_boot)
+r.squaredGLMM(glm_age_2_jack2)
+r.squaredGLMM(glm_age_1_jack2)
+r.squaredGLMM(glm_null_jack2)
+
+r.squaredGLMM(glm_integrity_2_num)
+r.squaredGLMM(glm_integrity_1_num)
+r.squaredGLMM(glm_integrity_2_chao)
+r.squaredGLMM(glm_integrity_1_chao)
+r.squaredGLMM(glm_integrity_2_boot)
+r.squaredGLMM(glm_integrity_1_boot)
+r.squaredGLMM(glm_integrity_2_jack2)
+r.squaredGLMM(glm_integrity_1_jack2)
+```
 
 ```{r}
 # Model validation
-plot(glm4.2.1)
+plot(glm_age_2_num)
 ```
 
-```{r}
-# How much variance is explained by the model
-r.squaredGLMM(glm4.2.1) # The help of this function indicates that: "Trigamma-estimate is recommended whenever available".
-```
+### Account for the growth form
 
 ```{r}
-# Predict the effects of the variable
-predict_glm4.2.1 = ggpredict(glm4.2.1, "Age", back.transform = TRUE)
-
-# Plot the predicted effect and the real values
-ggplot(predict_glm4.2.1, aes(x, predicted)) +
-  geom_line(size = 1) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
-  geom_point(data = temp2.4, position = position_jitter(width = 0, height = 0.1), aes(x = Age, y = num_species, color = as.factor(Age)), size = 2) +
-  labs(x = "Site Age", y = "Number of species") +
-  scale_color_manual(values = age_palette)
-```
-
-Quadratic effect is not significant even though we might expect species richness to reach a plateau... That might be due to the low level of data points, not enough to detect fine scale variation.
-
-```{r}
-# Should we estimate the number of species per Growth form as well?
-
 # Number of different species per Growth form per site
 temp2.5 <- data %>%
   filter(Seedling_id != "Unidentified") %>% # Remove "Unidentified" from this plot
-  group_by(Plot_id, Growth_form) %>%
+  group_by(Plot_id, Woody) %>%
   summarise(num_species = n_distinct(Seedling_id)) %>%
   ungroup() %>%
-  complete(Plot_id, Growth_form, fill = list(num_species = 0)) # Add 0 when none of a growth form is found in a specific Sample_id
+  complete(Plot_id, Woody, fill = list(num_species = 0)) # Add 0 when none of a growth form is found in a specific Sample_id
 head(temp2.5)
 
 temp2.5 <- merge(temp2.5, plots) # Get the Age column back in the species_count_plot tibble
 
-ggplot(temp2.5, aes(x = reorder(Plot_id, Age), y = num_species)) +
-  geom_bar(stat = "identity", aes(fill = Growth_form), position = "dodge", color = "grey10") + 
-  labs(x = "Site name", y = "Number of Species", fill = "Growth form") +
-  scale_fill_manual(values = growth_form_palette)
-
-ggplot(temp2.5, aes(x = reorder(Plot_id, Age), y = num_species)) +
-  geom_bar(stat = "identity", aes(fill = as.factor(Age)), position = "dodge", color = "grey10") +
-  facet_wrap(~Growth_form, scales = "free_y") +
-  labs(fill = "Site Age", x = "Site name", y = "Number of Species") +
-  scale_fill_manual(values = age_palette)
+# ggplot(temp2.5, aes(x = reorder(Plot_id, Age), y = num_species)) +
+#   geom_bar(stat = "identity", aes(fill = Woody), position = "dodge", color = "grey10") + 
+#   labs(x = "Site name", y = "Number of Species", fill = "Growth form") +
+#   scale_fill_manual(values = growth_form_palette)
 
 # remove datasets that are not of use anymore
 rm(temp2.5)
 ```
 
-## 4.3. Taking into account species eveness
+**Woody species only**
+
+```{r}
+# Format data beforehand
+
+# Count the abundance of each species within each sample
+temp4.2.1 <- subset(data) %>%
+  filter(Seedling_id != "Unidentified") %>% # Remove "Unidentified" from this plot
+  group_by(Sample_id, Seedling_id) %>%
+  filter(Woody == "Woody") %>% # Filter according to growth form
+  summarise(Abundance = n()) %>%
+  ungroup()
+
+# Merge the complete dataset with this dataset to have every sample
+temp4.2.1 <- merge(subset(samples, select = -c(Plot_id, Age)), temp4.2.1, by = "Sample_id", all.x = TRUE)
+temp4.2.1[is.na(temp4.2.1)] <- 0
+
+# Reshape the data to wide format
+temp4.2.1_wide <- spread(temp4.2.1, Seedling_id, Abundance, fill = 0)
+temp4.2.1_wide <- temp4.2.1_wide[, !(names(temp4.2.1_wide) %in% c("<NA>"))] # Remove the columns created because of the merge with samples dataframe
+
+# Set the Sample_id column as row names
+rownames(temp4.2.1_wide) <- temp4.2.1_wide$Sample_id
+temp4.2.1_wide$Sample_id <- NULL
+
+# Now, species_abundance_wide dataframe is in the required format
+```
+
+```{r}
+plot_names <- unique(sub("\\..*", "", rownames(temp4.2.1_wide)))
+temp4.3.1 <- lapply(plot_names, function(plot_name) {
+  subset(temp4.2.1_wide, grepl(paste0("^", plot_name, "\\."), rownames(temp4.2.1_wide)))
+})
+
+# Apply specpool() to each dataframe in temp4.3.1
+temp4.3.2 <- lapply(temp4.3.1, function(df) {
+  specpool_result <- specpool(df) %>%
+    round(1)
+  specpool_result$Plot_id_census <- unique(sub("\\..*", "", rownames(df)))
+  return(specpool_result)
+})
+
+temp4.3.3 <- bind_rows(temp4.3.2) # Combine the results into one dataframe
+print(temp4.3.3)
+```
+
+```{r}
+# Number of different species per plot
+temp2.4_w <- data %>%
+  filter(Seedling_id != "Unidentified") %>% # Remove "Unidentified" from this plot
+  group_by(Plot_id) %>%
+  summarise(num_species = n_distinct(Seedling_id))
+temp2.4_w <- merge(temp2.4_w, plots) # Get the Age column back in the species_count_plot tibble
+temp2.4_w <- merge(temp2.4_w, temp4.3.3)
+```
+
+```{r}
+# GLM using negative binomial distribution
+
+# Num_species
+global.model.num_w <- glm.nb(Species ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4_w, na.action = na.fail)
+dredge(global.model.num_w, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_num_w <- glm.nb(Species ~ Age + I(Age^2), data = temp2.4_w)
+summary(glm_age_2_num_w)
+glm_age_1_num_w <- glm.nb(Species ~ Age, data = temp2.4_w)
+summary(glm_age_1_num_w)
+glm_null_num_w <- glm.nb(Species ~ 1, data = temp2.4_w)
+summary(glm_null_num_w)
+glm_integrity_2_num_w <- glm.nb(Species ~ Integrity + I(Integrity^2), data = temp2.4_w)
+summary(glm_integrity_2_num_w)
+glm_integrity_1_num_w <- glm.nb(Species ~ Integrity, data = temp2.4_w)
+summary(glm_integrity_1_num_w)
+
+# Chao
+global.model.chao_w <- glm.nb(chao ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4_w, na.action = na.fail)
+dredge(global.model.chao_w, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_chao_w <- glm.nb(chao ~ Age + I(Age^2), data = temp2.4_w)
+summary(glm_age_2_chao_w)
+glm_age_1_chao_w <- glm.nb(chao ~ Age, data = temp2.4_w)
+summary(glm_age_1_chao_w)
+glm_null_chao_w <- glm.nb(chao ~ 1, data = temp2.4_w)
+summary(glm_null_chao_w)
+glm_integrity_2_chao_w <- glm.nb(chao ~ Integrity + I(Integrity^2), data = temp2.4_w)
+summary(glm_integrity_2_chao_w)
+glm_integrity_1_chao_w <- glm.nb(chao ~ Integrity, data = temp2.4_w)
+summary(glm_integrity_1_chao_w)
+
+# Jackknife 2
+global.model.jack2_w <- glm.nb(jack2 ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4_w, na.action = na.fail)
+dredge(global.model.jack2_w, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_jack2_w <- glm.nb(jack2 ~ Age + I(Age^2), data = temp2.4_w)
+summary(glm_age_2_jack2_w)
+glm_age_1_jack2_w <- glm.nb(jack2 ~ Age, data = temp2.4_w)
+summary(glm_age_1_jack2_w)
+glm_null_jack2_w <- glm.nb(jack2 ~ 1, data = temp2.4_w)
+summary(glm_null_jack2_w)
+glm_integrity_2_jack2_w <- glm.nb(jack2 ~ Integrity + I(Integrity^2), data = temp2.4_w)
+summary(glm_integrity_2_jack2)
+glm_integrity_1_jack2_w <- glm.nb(jack2 ~ Integrity, data = temp2.4_w)
+summary(glm_integrity_1_jack2_w)
+
+# Bootstrap
+global.model.boot_w <- glm.nb(boot ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4_w, na.action = na.fail)
+dredge(global.model.boot_w, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_boot_w <- glm.nb(boot ~ Age + I(Age^2), data = temp2.4_w)
+summary(glm_age_2_boot_w)
+glm_age_1_boot_w <- glm.nb(boot ~ Age, data = temp2.4_w)
+summary(glm_age_1_boot_w)
+glm_null_boot_w <- glm.nb(boot ~ 1, data = temp2.4_w)
+summary(glm_null_boot_w)
+glm_integrity_2_boot_w <- glm.nb(boot ~ Integrity + I(Integrity^2), data = temp2.4_w)
+summary(glm_age_2_boot_w)
+glm_integrity_1_boot_w <- glm.nb(boot ~ Integrity, data = temp2.4_w)
+summary(glm_age_1_boot_w)
+```
+
+```{r}
+r.squaredGLMM(glm_age_2_num_w)
+r.squaredGLMM(glm_age_1_num_w)
+r.squaredGLMM(glm_null_num_w)
+r.squaredGLMM(glm_age_2_chao_w)
+r.squaredGLMM(glm_age_1_chao_w)
+r.squaredGLMM(glm_null_chao_w)
+r.squaredGLMM(glm_age_2_boot_w)
+r.squaredGLMM(glm_age_1_boot_w)
+r.squaredGLMM(glm_null_boot_w)
+r.squaredGLMM(glm_age_2_jack2_w)
+r.squaredGLMM(glm_age_1_jack2_w)
+r.squaredGLMM(glm_null_jack2_w)
+
+r.squaredGLMM(glm_integrity_2_num_w)
+r.squaredGLMM(glm_integrity_1_num_w)
+r.squaredGLMM(glm_integrity_2_chao_w)
+r.squaredGLMM(glm_integrity_1_chao_w)
+r.squaredGLMM(glm_integrity_2_boot_w)
+r.squaredGLMM(glm_integrity_1_boot_w)
+r.squaredGLMM(glm_integrity_2_jack2_w)
+r.squaredGLMM(glm_integrity_1_jack2_w)
+```
+
+**Non woody species only**
+
+```{r}
+# Format data beforehand
+
+# Count the abundance of each species within each sample
+temp4.2.1 <- subset(data) %>%
+  filter(Seedling_id != "Unidentified") %>% # Remove "Unidentified" from this plot
+  group_by(Sample_id, Seedling_id) %>%
+  filter(Woody == "Non woody") %>% # Filter according to growth form
+  summarise(Abundance = n()) %>%
+  ungroup()
+
+# Merge the complete dataset with this dataset to have every sample
+temp4.2.1 <- merge(subset(samples, select = -c(Plot_id, Age)), temp4.2.1, by = "Sample_id", all.x = TRUE)
+temp4.2.1[is.na(temp4.2.1)] <- 0
+
+# Reshape the data to wide format
+temp4.2.1_wide <- spread(temp4.2.1, Seedling_id, Abundance, fill = 0)
+temp4.2.1_wide <- temp4.2.1_wide[, !(names(temp4.2.1_wide) %in% c("<NA>"))] # Remove the columns created because of the merge with samples dataframe
+
+# Set the Sample_id column as row names
+rownames(temp4.2.1_wide) <- temp4.2.1_wide$Sample_id
+temp4.2.1_wide$Sample_id <- NULL
+
+# Now, species_abundance_wide dataframe is in the required format
+```
+
+```{r}
+plot_names <- unique(sub("\\..*", "", rownames(temp4.2.1_wide)))
+temp4.3.1 <- lapply(plot_names, function(plot_name) {
+  subset(temp4.2.1_wide, grepl(paste0("^", plot_name, "\\."), rownames(temp4.2.1_wide)))
+})
+
+# Apply specpool() to each dataframe in temp4.3.1
+temp4.3.2 <- lapply(temp4.3.1, function(df) {
+  specpool_result <- specpool(df) %>%
+    round(1)
+  specpool_result$Plot_id_census <- unique(sub("\\..*", "", rownames(df)))
+  return(specpool_result)
+})
+
+temp4.3.3 <- bind_rows(temp4.3.2) # Combine the results into one dataframe
+print(temp4.3.3)
+```
+
+```{r}
+# Number of different species per plot
+temp2.4_nw <- data %>%
+  filter(Seedling_id != "Unidentified") %>% # Remove "Unidentified" from this plot
+  group_by(Plot_id) %>%
+  summarise(num_species = n_distinct(Seedling_id))
+temp2.4_nw <- merge(temp2.4_nw, plots) # Get the Age column back in the species_count_plot tibble
+temp2.4_nw <- merge(temp2.4_nw, temp4.3.3)
+```
+
+```{r}
+# GLM using negative binomial distribution
+
+# Num_species
+global.model.num_nw <- glm.nb(Species ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4_nw, na.action = na.fail)
+dredge(global.model.num_nw, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_num_nw <- glm.nb(Species ~ Age + I(Age^2), data = temp2.4_nw)
+summary(glm_age_2_num_nw)
+glm_age_1_num_nw <- glm.nb(Species ~ Age, data = temp2.4_nw)
+summary(glm_age_1_num_nw)
+glm_null_num_nw <- glm.nb(Species ~ 1, data = temp2.4_nw)
+summary(glm_null_num_nw)
+glm_integrity_2_num_nw <- glm.nb(Species ~ Integrity + I(Integrity^2), data = temp2.4_nw)
+summary(glm_integrity_2_num_nw)
+glm_integrity_1_num_nw <- glm.nb(Species ~ Integrity, data = temp2.4_nw)
+summary(glm_integrity_1_num_nw)
+
+# Chao
+global.model.chao_nw <- glm.nb(chao ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4_nw, na.action = na.fail)
+dredge(global.model.chao_nw, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_chao_nw <- glm.nb(chao ~ Age + I(Age^2), data = temp2.4_nw)
+summary(glm_age_2_chao_nw)
+glm_age_1_chao_nw <- glm.nb(chao ~ Age, data = temp2.4_nw)
+summary(glm_age_1_chao_nw)
+glm_null_chao_nw <- glm.nb(chao ~ 1, data = temp2.4_nw)
+summary(glm_null_chao_nw)
+glm_integrity_2_chao_nw <- glm.nb(chao ~ Integrity + I(Integrity^2), data = temp2.4_nw)
+summary(glm_integrity_2_chao_nw)
+glm_integrity_1_chao_nw <- glm.nb(chao ~ Integrity, data = temp2.4_nw)
+summary(glm_integrity_1_chao_nw)
+
+# Jackknife 2
+global.model.jack2_nw <- glm.nb(jack2 ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4_nw, na.action = na.fail)
+dredge(global.model.jack2_nw, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_jack2_nw <- glm.nb(jack2 ~ Age + I(Age^2), data = temp2.4_nw)
+summary(glm_age_2_jack2_nw)
+glm_age_1_jack2_nw <- glm.nb(jack2 ~ Age, data = temp2.4_nw)
+summary(glm_age_1_jack2_nw)
+glm_null_jack2_nw <- glm.nb(jack2 ~ 1, data = temp2.4_nw)
+summary(glm_null_jack2_nw)
+glm_integrity_2_jack2_nw <- glm.nb(jack2 ~ Integrity + I(Integrity^2), data = temp2.4_nw)
+summary(glm_integrity_2_jack2)
+glm_integrity_1_jack2_nw <- glm.nb(jack2 ~ Integrity, data = temp2.4_nw)
+summary(glm_integrity_1_jack2_nw)
+
+# Bootstrap
+global.model.boot_nw <- glm.nb(boot ~ Age + I(Age^2) + Integrity + I(Integrity^2) , data = temp2.4_nw, na.action = na.fail)
+dredge(global.model.boot_nw, beta = "none", evaluate = TRUE, rank = "AICc", fixed = NULL, subset = subset_matrix)
+
+glm_age_2_boot_nw <- glm.nb(boot ~ Age + I(Age^2), data = temp2.4_nw)
+summary(glm_age_2_boot_nw)
+glm_age_1_boot_nw <- glm.nb(boot ~ Age, data = temp2.4_nw)
+summary(glm_age_1_boot_nw)
+glm_null_boot_nw <- glm.nb(boot ~ 1, data = temp2.4_nw)
+summary(glm_null_boot_nw)
+glm_integrity_2_boot_nw <- glm.nb(boot ~ Integrity + I(Integrity^2), data = temp2.4_nw)
+summary(glm_age_2_boot_nw)
+glm_integrity_1_boot_nw <- glm.nb(boot ~ Integrity, data = temp2.4_nw)
+summary(glm_age_1_boot_nw)
+```
+
+```{r}
+r.squaredGLMM(glm_age_2_num_nw)
+r.squaredGLMM(glm_age_1_num_nw)
+r.squaredGLMM(glm_null_num_nw)
+r.squaredGLMM(glm_age_2_chao_nw)
+r.squaredGLMM(glm_age_1_chao_nw)
+r.squaredGLMM(glm_null_chao_nw)
+r.squaredGLMM(glm_age_2_boot_nw)
+r.squaredGLMM(glm_age_1_boot_nw)
+r.squaredGLMM(glm_null_boot_nw)
+r.squaredGLMM(glm_age_2_jack2_nw)
+r.squaredGLMM(glm_age_1_jack2_nw)
+r.squaredGLMM(glm_null_jack2_nw)
+
+r.squaredGLMM(glm_integrity_2_num_nw)
+r.squaredGLMM(glm_integrity_1_num_nw)
+r.squaredGLMM(glm_integrity_2_chao_nw)
+r.squaredGLMM(glm_integrity_1_chao_nw)
+r.squaredGLMM(glm_integrity_2_boot_nw)
+r.squaredGLMM(glm_integrity_1_boot_nw)
+r.squaredGLMM(glm_integrity_2_jack2_nw)
+r.squaredGLMM(glm_integrity_1_jack2_nw)
+```
+
+```{r}
+# Predict the effects of the variable
+predict_glm_age_2_num = ggpredict(glm_age_2_num, "Age", back.transform = TRUE)
+predict_glm_age_2_num_nw = ggpredict(glm_age_2_num_nw, "Age", back.transform = TRUE)
+predict_glm_age_1_num_w = ggpredict(glm_age_1_num_w, "Age", back.transform = TRUE)
+```
+
+```{r}
+# Plot woody, Non woody and all together
+
+# Define colors for each model
+
+ggplot() +
+  # Add the first geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glm_age_2_num, aes(x = x, y = predicted, color = "Woody + Non woody"), size = 1) +
+  geom_ribbon(data = predict_glm_age_2_num, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Woody + Non woody"), alpha = 0.2) +
+  # Add the second geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glm_age_1_num_w, aes(x = x, y = predicted, color = "Woody"), size = 1) +
+  geom_ribbon(data = predict_glm_age_1_num_w, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Woody"), alpha = 0.2) +
+  # Add the third geom_line and geom_ribbon with the same color
+  geom_line(data = predict_glm_age_2_num_nw, aes(x = x, y = predicted, color = "Non woody"), size = 1) +
+  geom_ribbon(data = predict_glm_age_2_num_nw, aes(x = x, ymin = conf.low, ymax = conf.high, fill = "Non_woody"), alpha = 0.2) +
+  # Add points
+  geom_point(data = temp2.4_nw, aes(x = Age, y = Species, color = "Non woody"), size = 1.5, position = position_nudge(x = 0.5)) +
+  geom_point(data = temp2.4_w, aes(x = Age, y = Species, color = "Woody"), size = 1.5, position = position_nudge(x = -0.5)) +
+  # Set labels
+  labs(x = "Site Age", y = "Observed species richness") +
+  # Define the color palette for lines and ribbons
+  scale_color_manual(name = "Model", values = model_palette) +
+  scale_fill_manual(name = "Model", values = model_palette)
+```
+
+### Species evenness
 
 A diversity index is a quantitative measure that reflects how many different species there are in a community, taking into account different aspects (richness, evenness, and dominance). Richness simply quantifies how many different types the dataset contains. For example, species richness (usually noted S) of a dataset is the number of species in the corresponding species list. Richness is a simple measure, so it has been a popular diversity index in ecology, where abundance data are often not available for the datasets of interest.
 
@@ -936,47 +1579,34 @@ print(combined_results)
 ```
 
 ```{r}
-# Plot these index
-
 # Add age information
-combined_results <- merge (combined_results, subset(plots, select = c(Plot_id, Age)))
-
-ggplot(combined_results, aes(x = reorder(Plot_id, Age))) +
-  geom_point(aes(y = Shannon), color = "#EE8959", size = 2.5) +
-  geom_point(aes(y = Simpson), color = "#2A9D8F", size = 2.5) + 
-  labs(x = "Site name", y = "Index value")
-
-ggplot(combined_results, aes(x = Age)) +
-  geom_point(aes(y = Shannon), color = "#EE8959", size = 2.5) +
-  geom_point(aes(y = Simpson), color = "#2A9D8F", size = 2.5) + 
-  labs(x = "Site age", y = "Index value")
+combined_results <- merge(combined_results, subset(plots, select = c(Plot_id, Age)))
 ```
 
 **Evenness Index**
 
-Species evenness refers to how close in numbers each species in an environment is. The evenness of a community can be represented by Pielou's evenness index. The value of J ranges from 0 to 1. Higher values indicate higher levels of evenness. At maximum evenness, J = 1.
-To compute Pielou's evenness index, first need to calculate Shannon's diversity index (H) and then divide it by the natural logarithm of the total number of species (S). 
+Species evenness refers to how close in numbers each species in an environment is. The evenness of a community can be represented by Pielou's evenness index. The value of J ranges from 0 to 1. Higher values indicate higher levels of evenness. At maximum evenness, J = 1. To compute Pielou's evenness index, first need to calculate Shannon's diversity index (H) and then divide it by the natural logarithm of the total number of species (S).
 
 ```{r}
 # Compute Pielou's evenness index
 combined_results$Pielou <- combined_results$Shannon/log(specnumber(plot_species_abundance))
-
-ggplot(combined_results, aes(x = Age)) +
-  geom_point(aes(y = Pielou), size = 2.5) +
-  #geom_text(aes(label = Plot_id, y = Pielou, vjust = 1)) +
-  labs(x = "Site age", y = "Pielou index value")
 ```
 
 ```{r}
 # GLMM using Beta distribution because index is bounded between 0 and 1
-glm4.3.1 <- glm(Pielou ~ Age, data = combined_results, family = Gamma(link = "inverse"))
-glm4.3.2 <- glm(Pielou ~ Age + I(Age^2), data = combined_results, family = Gamma(link = "inverse"))
+
+glm4.3.1 <- betareg(Pielou ~ Age, data = combined_results)
+glm4.3.2 <- betareg(Pielou ~ Age + I(Age^2), data = combined_results)
+glm4.3.3 <- betareg(Pielou ~ 1, data = combined_results)
+
+AICc(glm4.3.1)
+AICc(glm4.3.2)
+AICc(glm4.3.3)
 
 summary(glm4.3.1)
 summary(glm4.3.2)
+summary(glm4.3.3)
 ```
-
-Despite having very few data points (12), we have a significant effect of site age on the (estimated) species richness.
 
 ```{r}
 # Model validation
@@ -984,20 +1614,15 @@ plot(glm4.3.1)
 ```
 
 ```{r}
-# How much variance is explained by the model
-# r.squaredGLMM(glm4.3.1) # The help of this function indicates that: "Trigamma-estimate is recommended whenever available".
-# Do not know how to calculate variance for Gamma(“inverse”)
-```
-
-```{r}
 # Predict the effects of the variable
+
 predict_glm4.3.1 = ggpredict(glm4.3.1, "Age", back.transform = TRUE)
 
 # Plot the predicted effect and the real values
 ggplot(predict_glm4.3.1, aes(x, predicted)) +
   geom_line(size = 1) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
-  geom_point(data = combined_results, position = position_jitter(width = 0, height = 0.1), aes(x = Age, y = Pielou, color = as.factor(Age)), size = 2) +
+  geom_point(data = combined_results, aes(x = Age, y = Pielou), size = 2) +
   labs(x = "Site Age", y = "Pielou index") +
   scale_color_manual(values = age_palette)
 
@@ -1011,36 +1636,28 @@ ggplot(predict_glm4.3.2, aes(x, predicted)) +
   geom_point(data = combined_results, position = position_jitter(width = 0, height = 0.1), aes(x = Age, y = Pielou, color = as.factor(Age)), size = 2) +
   labs(x = "Site Age", y = "Pielou index") +
   scale_color_manual(values = age_palette)
-
 ```
 
-# 5. Seed bank composition
+# 6. Seed bank composition
 
-## 5.1. Distance between sites
+## 6.1. Distance between sites
 
-Problems with Euclidean distance: Euclidean distance is not a good measure of the distance of ecological communities between two sites because it can't handle non-continuous data properly. Moreover, according to this metric, two sites where a species is absent (0) are more similar than two sites where the species is present at slightly different levels. It’s possible for two samples with no species in common to have a smaller Euclidean distance than two samples that share species. However, the absence of a species at two sites isn't always an indicator of similarity between them. According to the ecological niche concept, each species is subject to several environmental constraints. While the presence of the same species at two sites may be indicative of habitat similarity, this is less true for a common absence, as both sites may be unfavorable to the species for different reasons.
-Source: https://pmarchand1.github.io/ECL7102/notes_cours/14-Analyses_multivariees_Partie2.html
+Problems with Euclidean distance: Euclidean distance is not a good measure of the distance of ecological communities between two sites because it can't handle non-continuous data properly. Moreover, according to this metric, two sites where a species is absent (0) are more similar than two sites where the species is present at slightly different levels. It’s possible for two samples with no species in common to have a smaller Euclidean distance than two samples that share species. However, the absence of a species at two sites isn't always an indicator of similarity between them. According to the ecological niche concept, each species is subject to several environmental constraints. While the presence of the same species at two sites may be indicative of habitat similarity, this is less true for a common absence, as both sites may be unfavorable to the species for different reasons. Source: <https://pmarchand1.github.io/ECL7102/notes_cours/14-Analyses_multivariees_Partie2.html>
 
 Moreover, the detection of a species indicates its presence on the site, while its absence from detection does not guarantee that the species is absent from the site, as it may simply not have been sampled. Thus, detection of a species is more reliable than non-detection, and the absence of a species from two sites does not necessarily guarantee similarity between them. We therefore chose a distance based on Bray-Curtis's index, giving more weight to species in common.
 
 This index specifically excludes cases where a species is absent from both sites (it's an asymmetrical index), and gives greater weight to species present at both sites than to species present at one site but not at the other. Species shared between sites are therefore considered more significant in the assessment of similarity between sites, in order to correct for the risks of non-detectability mentioned above.
 
-**Look at this:** https://uw.pressbooks.pub/appliedmultivariatestatistics/chapter/common-distance-measures/ "Note: Recent work has decomposed or partitioned Bray-Curtis distances into two components, one related to ‘balanced variation in abundance’ and the other to ‘abundance gradients’ (Baselga 2013). These components are analogous to the turnover and nestedness components of Jaccard dissimilarities. See the description of the betapart package below for more information."
-
-```{r}
-# Remove the most distinctive plots to see how the other are scattered on the plot
-temp5.1.1 <- plot_species_abundance[!rownames(plot_species_abundance) %in% c("JOB", "CER", "EF1", "EF2"), ]
-```
+**Look at this:** <https://uw.pressbooks.pub/appliedmultivariatestatistics/chapter/common-distance-measures/> "Note: Recent work has decomposed or partitioned Bray-Curtis distances into two components, one related to ‘balanced variation in abundance’ and the other to ‘abundance gradients’ (Baselga 2013). These components are analogous to the turnover and nestedness components of Jaccard dissimilarities. See the description of the betapart package below for more information."
 
 ```{r}
 # Using Bray-Curtis distance between communities
 plot_species_abundance_d.1 <- vegdist(plot_species_abundance, method = "bray")
-temp5.1.1_d <- vegdist(temp5.1.1, method = "bray")
 
 print(plot_species_abundance_d.1)
 ```
-Species may be highly frequent when conditions are favourable, or may be absent from many sites. Sometimes, this skewness may introduce spurious problems to our analyses. We may then have to transform our composition data to appropriately analyze it.
-Source: https://r.qcbs.ca/workshop09/book-en/transformations.html
+
+Species may be highly frequent when conditions are favourable, or may be absent from many sites. Sometimes, this skewness may introduce spurious problems to our analyses. We may then have to transform our composition data to appropriately analyze it. Source: <https://r.qcbs.ca/workshop09/book-en/transformations.html>
 
 **Data transformation**
 
@@ -1052,14 +1669,14 @@ plot_species_abundance_d.3 <- vegdist(spe.pa, method = "jaccard") # Results are 
 
 # Into relative abundance
 spe.total <- decostand(plot_species_abundance, method = "total")
-plot_species_abundance_d.4 <- vegdist(spe.total, method = "bray") # Results are very similar to Bray-Curtis (with counts instead of relatve abundance)
+plot_species_abundance_d.4 <- vegdist(spe.total, method = "bray") # Results are very similar to Bray-Curtis (with counts instead of relative abundance)
 
 # Hellinger transformation
 spe.hel <- decostand(plot_species_abundance, method = "hellinger")
 plot_species_abundance_d.5 <- vegdist(spe.hel, method = "bray") # Results are very interesting
 ```
 
-## 5.2. Perform PCoA
+## 6.2. PCoA
 
 **Eighenvalues**
 
@@ -1109,25 +1726,11 @@ pcoa5.2.4 <- pcoa5.2.3$points[, 1:4] %>% # Extract first 4 dimensions
 
 # Plot only the sites
 ggplot(pcoa5.2.4, aes(x = PCoA1, y = PCoA2)) +
-  geom_point(shape = 16, size = 5, aes(colour = as.factor(Age))) +
-  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
-  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +
-  #geom_text(data = pcoa5.2.4, aes(x = PCoA1, y = PCoA2, label = Plot_id, hjust = -0.2, vjust = 0)) +
-  scale_color_manual(values = age_palette)
-
-# Plot only the sites
-ggplot(pcoa5.2.4, aes(x = PCoA1, y = PCoA2)) +
   #geom_point(shape = 16, size = 5, aes(colour = as.factor(Age))) +
   geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
   geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +
   geom_text(data = pcoa5.2.4, aes(x = PCoA1, y = PCoA2, label = Plot_id, color = as.factor(Age), fontface = "bold", size = 3)) +
-  scale_color_manual(values = age_palette)
-
-ggplot(pcoa5.2.4, aes(x = PCoA3, y = PCoA4)) +
-  geom_point(shape = 16, size = 5, aes(colour = as.factor(Age))) +
-  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
-  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +
-  #geom_text(data = pcoa5.2.4, aes(x = PCoA1, y = PCoA2, label = Plot_id, hjust = -0.2, vjust = 0)) +
+  labs(x = paste0("PCoA1", " (", as.character(round(temp5.2.1$Variance_proportion[1]*100, 1)), "%)"), y = paste0("PCoA2"," (", as.character(round(temp5.2.1$Variance_proportion[2]*100, 1)), "%)")) +
   scale_color_manual(values = age_palette)
 
 ggplot(pcoa5.2.4, aes(x = PCoA3, y = PCoA4)) +
@@ -1135,38 +1738,15 @@ ggplot(pcoa5.2.4, aes(x = PCoA3, y = PCoA4)) +
   geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
   geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +
   geom_text(data = pcoa5.2.4, aes(x = PCoA3, y = PCoA4, label = Plot_id, color = as.factor(Age), fontface = "bold", size = 3)) +
+  labs(x = paste0("PCoA1", " (", as.character(round(temp5.2.1$Variance_proportion[1]*100, 1)), "%)"), y = paste0("PCoA2"," (", as.character(round(temp5.2.1$Variance_proportion[2]*100, 1)), "%)")) +
   scale_color_manual(values = age_palette)
 ```
 
 ```{r}
-# Add confidence ellipses
-library(ggforce)
-
-ggplot(pcoa5.2.4, aes(x = PCoA1, y = PCoA2)) +
-  geom_point(shape = 16, size = 5, aes(colour = as.factor(Age))) +
-  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
-  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +
-  geom_mark_ellipse(aes(fill = as.factor(Age)), colour = NA) +
-  #geom_text(data = pcoa5.2.4, aes(x = PCoA1, y = PCoA2, label = Plot_id, hjust = -0.2, vjust = 0)) +
-  scale_color_manual(values = age_palette) +
-  scale_fill_manual(values = age_palette)
-```
-
-```{r}
 # Add species
-spe.wa <- wascores(pcoa5.2.3$points[, 1:4], plot_species_abundance)
+spe.wa <- wascores(pcoa5.2.3$points[, 1:4], plot_species_abundance) %>%
+  as.data.frame()
 colnames(spe.wa) <- c("PCoA1", "PCoA2", "PCoA3", "PCoA4")
-rownames(spe.wa) <- abbreviate(rownames(spe.wa), minlength = 7)  
-
-ggplot(pcoa5.2.4, aes(x = PCoA1, y = PCoA2)) +
-  geom_point(shape = 16, size = 5, aes(colour = as.factor(Age))) +
-  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
-  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +
-  #geom_text(data = pcoa5.2.4, aes(x = PCoA1, y = PCoA2, label = Plot_id, hjust = -0.2, vjust = 0)) +
-  scale_color_manual(values = age_palette) +
-  # Add labels for weighted average projection of species
-  # geom_text(data = as.data.frame(spe.wa), aes(x = PCoA1, y = PCoA2, label = rownames(spe.wa)), color = "#000099", size = 3, position=position_jitter())
-  geom_text_repel(data = as.data.frame(spe.wa), aes(x = PCoA1, y = PCoA2, label = rownames(spe.wa)), color = "black", size = 3, max.overlaps=nrow(spe.wa))
 ```
 
 **Assessment of Age impact**
@@ -1186,44 +1766,418 @@ print(permanova)
 permanova$R2
 ```
 
-## 5.2. Perform NMDS
+## 6.3. Perform NMDS
 
-If the priority is not to preserve the exact distances among objects in an ordination plot, but rather to represent as well as possible the ordering relationships among objects in a small and specified number of axes, non metric multidimensional scaling (NMDS) might be a solution. 
+If the priority is not to preserve the exact distances among objects in an ordination plot, but rather to represent as well as possible the ordering relationships among objects in a small and specified number of axes, non metric multidimensional scaling (NMDS) might be a solution.
 
 Like PCoA, it can use any distance matrix. NMDS is not an eigenvalue technique, and it does not maximize the variability associated with individual axes of the ordination.
 
-How it works:
-- Specify the number m of axes (dimensions) 
-- Construct an initial configuration of the objects in the m dimensions, to be used as a starting point of an iterative adjustment process. This is a tricky step, since the end-result may depend on the starting configuration. A PCoA ordination may be a good starting point. Otherwise, try many independent runs with random initial configurations.
-- An iterative procedure tries to position the objects in the m dimensions in such a way as to minimize a stress function (scaled from 0 to 1), which measures how far the distances in the reduced-space configuration are from being monotonic to the original distances in the association matrix. The adjustment goes on until the stress value can no more be lowered.
+How it works: - Specify the number m of axes (dimensions) - Construct an initial configuration of the objects in the m dimensions, to be used as a starting point of an iterative adjustment process. This is a tricky step, since the end-result may depend on the starting configuration. A PCoA ordination may be a good starting point. Otherwise, try many independent runs with random initial configurations. - An iterative procedure tries to position the objects in the m dimensions in such a way as to minimize a stress function (scaled from 0 to 1), which measures how far the distances in the reduced-space configuration are from being monotonic to the original distances in the association matrix. The adjustment goes on until the stress value can no more be lowered.
 
 Source: D. Borcard, F. Gillet, et P. Legendre, Numerical Ecology with R. New York, NY: Springer New York, 2011. doi: 10.1007/978-1-4419-7976-6.
 
-Additional resource:
-- https://rpubs.com/CPEL/NMDS
+Additional resource: - <https://rpubs.com/CPEL/NMDS>
 
 ```{r}
 # Distance matrix (Bray-Curtis distance)
 print(plot_species_abundance_d)
 ```
 
-We will run NMDS using metaMDS(). 
-- Distance matrix
-- Distance metric (which should match the one used in the distance matrix)
-- Selected number of dimensions 
-- Your max number of iterations (usually = 999)
-- Maximum number of random starts (usually = 250). You may need to do a couple of runs with different values. 
-- Finally, wascores is a method of calculating species scores, default is TRUE.
+We will run NMDS using metaMDS(). - Distance matrix - Distance metric (which should match the one used in the distance matrix) - Selected number of dimensions - Your max number of iterations (usually = 999) - Maximum number of random starts (usually = 250). You may need to do a couple of runs with different values. - Finally, wascores is a method of calculating species scores, default is TRUE.
 
 ```{r}
 # Running NMDS 
 nmds <- metaMDS(plot_species_abundance_d, distance = "bray")
 ```
-Warning: stress is (nearly) zero: you may have insufficient data
-https://github.com/vegandevs/vegan/issues/399
+
+Warning: stress is (nearly) zero: you may have insufficient data <https://github.com/vegandevs/vegan/issues/399>
 
 ```{r}
 plot(nmds, "sites")   # Produces distance 
 orditorp(nmds, "sites")   # Gives points labels
 ```
 
+# 8. Proportion of shared species
+
+**Format datasets**
+
+```{r}
+# Prepare datasets to keep only relevant columns
+data_subset <- data %>%
+  dplyr::select(Plot_id, Age, Seedling_id, Growth_form) %>%
+  rename(Species_id = Seedling_id) %>%
+  mutate(Origin = "seed_bank") %>%
+  distinct(Plot_id, Species_id, .keep_all = TRUE) %>%
+  filter(Plot_id %in% c("SAI", "END", "POA", "PED", "FOS", "PEA", "BOH", "BAR"))
+
+standing_vegetation_subset <- standing_vegetation %>%
+  dplyr::select(Plot_id, Age, Species_id) %>%
+  mutate(Origin = "standing_vegetation") %>%
+  distinct(Plot_id, Species_id, .keep_all = TRUE)
+  
+
+data_std_vegetation <- bind_rows(data_subset, standing_vegetation_subset)
+```
+
+```{r}
+# Remove Morphospecies from the seed bank dataset
+# Keep only tree & shrub species
+data_subset <- data_subset %>%
+  filter(Growth_form == "Tree & shrub")
+unique(data_subset$Species_id)
+
+data_subset <- data_subset %>%
+  filter(!grepl("^\\?", Species_id)) %>%
+  filter(Species_id != "Malvaceae sp.2" & Species_id != "Psychotria sp1")
+unique(data_subset$Species_id)
+
+# Remove Undetermined and keep only tree species
+# Of course, undersampling and some are unidentified
+# Use the "estimated species richness" to estimate the highest number of species that might be in the seed bank and in the standing vegetation: still very little > subset
+# Of course, if the seed bank is very heterogenous along the 1 ha plot, the estimated species richness might be an underestimate of the real richness but still, the seed bank is certainly a subset of the standing vegetation
+```
+
+```{r}
+compute_species_counts <- function(site) {
+  data_species <- unique(data_subset[data_subset$Plot_id == site, "Species_id"])
+  standing_species <- unique(standing_vegetation_subset[standing_vegetation_subset$Plot_id == site, "Species_id"])
+  
+  seed_bank <- length(data_species)
+  standing_vegetation <- length(standing_species)
+  
+  shared_species <- length(intersect(data_species, standing_species))
+  unique_to_data <- length(setdiff(data_species, standing_species))
+  unique_to_standing <- length(setdiff(standing_species, data_species))
+  
+  return(data.frame(
+    Plot_id = site,
+    "Shared" = shared_species,
+    "Seed bank" = unique_to_data,
+    "Standing vegetation" = standing_vegetation
+    ))
+}
+
+# Obtenir la liste unique des sites
+sites <- unique(c(data_subset$Plot_id, standing_vegetation_subset$Plot_id))
+
+# Appliquer la fonction à chaque site et combiner les résultats
+final_result <- do.call(rbind, lapply(sites, compute_species_counts))
+
+# Affichage des résultats
+print(final_result)
+```
+
+```{r}
+final_result_long <- final_result %>%
+  pivot_longer(cols = -Plot_id, names_to = "Source", values_to = "Value")
+final_result_long <- merge(final_result_long, plots[, c("Plot_id", "Age")], by = "Plot_id")
+```
+
+```{r}
+# pairwise comparisons
+pwc <- final_result_long %>%
+  pairwise_t_test(
+    Value ~ Source, paired = TRUE,
+    p.adjust.method = "bonferroni"
+    )
+pwc <- pwc %>% add_xy_position(x = "Source")
+pwc$y.position <- c(0.9, 2.4, 2.6)
+
+pwc
+
+ggplot(final_result_long, aes(x = Source, y = Value)) +
+  geom_boxplot(outlier.shape = NA, aes(fill = Source)) + 
+  geom_beeswarm(size = 1.5, alpha = 0.7) +
+  scale_y_log10() + 
+  scale_fill_manual(values = c("#47A7E7", "#EABC34", "#84B754")) +
+  stat_pvalue_manual(pwc) +
+  labs(x = "Category", y = "Number of Species", fill = "Category")
+
+ggplot(final_result_long, aes(x = Source, y = Value)) +
+  geom_boxplot() +
+  geom_beeswarm(aes(color = Plot_id), size = 3, cex = 2) +
+  stat_pvalue_manual(pwc) +
+  scale_y_log10() +
+  scale_x_discrete(labels = c("Seed bank", "Shared", "Standing vegetation")) +
+  labs(color = "Site name") +
+  labs(y = "Number of species") +
+  scale_color_manual(values = c("#FF595E", "#FF924C", "#FFCA3A", "#8AC926", 
+                                "#52A675", "#1982C4", "#4267AC", "#6A4C93"))
+```
+
+```{r}
+final_result$Shared_proportion <- round(final_result$Shared / (final_result$Shared + final_result$Seed.bank)*100, 3)
+final_result$Seed.bank_proportion <- round(final_result$Seed.bank / (final_result$Shared + final_result$Seed.bank)*100, 3)
+```
+
+# 9. Comparison with Dalling & Denslow results
+
+```{r}
+# Compute Sorensen distance
+plot_species_abundance_d.2 <- vegdist(t(dalling_nassivera), method = "bray")
+```
+
+**Eighenvalues**
+
+```{r}
+# Choose the distance matrix you want
+plot_species_abundance_d <- plot_species_abundance_d.2
+
+# Perform PCoA analysis
+pcoa5.2.3 <- cmdscale(plot_species_abundance_d, k = (ncol(plot_species_abundance_d)-1), eig = TRUE)
+
+eigenvalues <- pcoa5.2.3$eig + 7.417981e-02 # Extracts eigenvalues and correct for negative eigenvalues
+variance_proportion <- eigenvalues / sum(eigenvalues) # Calculate the proportion of variance explained by each eigenvalue
+temp5.2.1 <- data.frame("Principal_coordinate" = 1:length(variance_proportion), "Variance_proportion" = variance_proportion) # Create a dataframe
+
+# Create the relative eigenvalues plot (Scree plot)
+ggplot(temp5.2.1, aes(x = as.factor(Principal_coordinate), y = Variance_proportion)) +
+  geom_bar(stat = "identity", fill = "grey70", color = "grey40") +
+  geom_text(aes(label = paste0(round(variance_proportion*100, 1))), vjust = -0.5) +
+  labs(x = "Principal coordinate", y = "Proportion of explained variance (%)")
+```
+
+**PCoA plot**
+
+```{r}
+# Convert PCoA results to a data frame
+pcoa5.2.4 <- pcoa5.2.3$points[, 1:4] %>% # Extract first 4 dimensions
+  as.data.frame() %>% # Need a dataframe for the plot function
+  setNames(c("PCoA1", "PCoA2", "PCoA3", "PCoA4"))
+
+pcoa5.2.4$Plot_id <- rownames(pcoa5.2.4)
+
+info <- data.frame(
+  Plot_id = c("CER_2024", "JOB_2024", "FOS_2024", "SAI_2024", "POA_2024", "BOH_2024", "EF1_2024", "EF2_2024", "BAR_2024", "END_2024", "PEA_2024", "PED_2024", "PED_1996", "SAI_1996", "END_1996", "FOS_1996", "BOH_1996", "POA_1996", "BAR_1996", "PER_1996", "ARM_1996", "ZET_1996"),
+  Age = c(0, 0, 70, 50, 100, 100, 10, 10, 130, 70, 130, 50, 20, 20, 40, 40, 70, 70, 100, 100, 500, 500),
+  Year = c(2024, 2024, 2024, 2024, 2024, 2024, 2024, 2024, 2024, 2024, 2024, 2024, 1996, 1996, 1996, 1996, 1996, 1996, 1996, 1996, 1996, 1996),
+  Site = c("CER", "JOB", "FOS", "SAI", "POA", "BOH", "EF1", "EF2", "BAR", "END", "PEA", "PED", "PED", "SAI", "END", "FOS", "BOH", "POA", "BAR", "PER", "ARM", "ZET")
+)
+
+pcoa5.2.4 <- merge(info, pcoa5.2.4)
+
+# # Remove "_2024" and "_1996"
+# pcoa5.2.4$Plot_id <- gsub("_2024", "", pcoa5.2.4$Plot_id)
+# pcoa5.2.4$Plot_id <- gsub("_1996", "", pcoa5.2.4$Plot_id)
+
+age_palette <- c( "#FBCE0D","#CAD237", "#92D050", "#00BC5E", "#009999", "#68456B","#44546A")
+
+# Plot only the sites
+ggplot(pcoa5.2.4, aes(x = PCoA1, y = PCoA2)) +
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +
+  geom_point(data = pcoa5.2.4, aes(x = PCoA1, y = PCoA2, label = Site, fontface = "bold", size = 0.4, color = as.factor(Age), shape = as.factor(Year))) +
+  geom_text(data = pcoa5.2.4, aes(x = PCoA1, y = PCoA2, label = Site, fontface = "bold", size = 0.4, color = as.factor(Age), vjust = -0.8, hjust = -0.))+
+  xlim(-0.35, 0.5) +
+  ylim(-0.7, 0.3) +
+  labs(x = paste0("PCoA1", " (", as.character(round(temp5.2.1$Variance_proportion[1]*100, 1)), "%)"), y = paste0("PCoA2"," (", as.character(round(temp5.2.1$Variance_proportion[2]*100, 1)), "%)")) +
+  scale_color_manual(values = age_palette)
+
+ggplot(pcoa5.2.4, aes(x = PCoA3, y = PCoA4)) +
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +
+  geom_point(data = pcoa5.2.4, aes(x = PCoA3, y = PCoA4, label = Site, fontface = "bold", size = 0.4, color = as.factor(Age), shape = as.factor(Year))) +
+  geom_text(data = pcoa5.2.4, aes(x = PCoA3, y = PCoA4, label = Site, fontface = "bold", size = 0.4, color = as.factor(Age), vjust = -0.8, hjust = -0.))+
+  xlim(-0.3, 0.5) +
+  ylim(-0.3, 0.4) +
+  labs(x = paste0("PCoA3", " (", as.character(round(temp5.2.1$Variance_proportion[3]*100, 1)), "%)"), y = paste0("PCoA4"," (", as.character(round(temp5.2.1$Variance_proportion[4]*100, 1)), "%)")) +
+  scale_color_manual(values = age_palette)
+```
+
+```{r}
+# PERMANOVA
+permanova_variables <- subset(pcoa5.2.4, select = c("Plot_id", "Year", "Age", "Site")) %>%
+  arrange(Year) # Otherwise it messes with the permanova : sites have to be order in the same way that in the distance matrix
+rownames(permanova_variables) <- permanova_variables$Plot_id
+
+permanova_variables$Year <- as.factor(permanova_variables$Year)
+
+
+# Use it to perform permanova
+permanova = adonis2(plot_species_abundance_d ~ Year + Age + Site, permanova_variables, permutations = 999)
+print(permanova)
+```
+
+# 10. Functional traits analyses
+
+## 10.1. Functional traits exploration
+
+```{r}
+# Calculate the number of species with non-missing values for each trait
+fun <- merge(functional_traits, species, by.y = "Seedling_id", by.x = "Species_name", all = TRUE) %>%
+  filter(Woody == "Woody")
+rownames(fun) <- fun$Species_name
+fun$Species_name <- NULL
+fun$Woody <- NULL
+fun$Growth_form <- NULL
+fun$Photosynthesis_pathway <- NULL
+fun$Wood_N_dry_mass <- NULL
+
+trait_counts <- fun %>%
+  summarise(across(everything(), ~ sum(!is.na(.))/0.4)) %>%
+  pivot_longer(cols = everything(), names_to = "Trait", values_to = "Count")
+
+# Create the ggplot
+ggplot(trait_counts, aes(x = Trait, y = Count)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(x = "Functional Trait",
+       y = "Proportion of Species (%)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+standardized_fun <- decostand(fun, method = "standardize")
+rows_to_keep <- !grepl("^\\?", rownames(standardized_fun))
+standardized_fun <- standardized_fun[rows_to_keep, ] %>%
+  select(-c(Seed_longevity, Plant_woodiness, Leaf_length_excluding_petiole, Leaf_chlorophyll, Germination_rate, Crown_length))
+
+replace_na_with_mean <- function(x) {
+  x[is.na(x)] <- mean(x, na.rm = TRUE)
+  return(x)
+}
+
+standardized_fun <- as.data.frame(lapply(standardized_fun, replace_na_with_mean))
+pca_result <- rda(standardized_fun, action = na.omit)
+biplot(pca_result)
+
+# Extract PCA scores
+pca_scores <- scores(pca_result, display = "sites")
+pca_scores_df <- as.data.frame(pca_scores)
+
+# Extract PCA loadings
+pca_loadings <- scores(pca_result, display = "species")
+pca_loadings_df <- as.data.frame(pca_loadings)
+
+# Create a ggplot
+f <- ggplot() +
+  geom_segment(data = pca_loadings_df, aes(x = 0, y = 0, xend = PC1, yend = PC2), 
+               arrow = arrow(length = unit(0.2, "cm")), color = "grey") +
+  geom_text(data = pca_loadings_df, aes(x = PC1, y = PC2, label = rownames(pca_loadings_df)), 
+            color = "black", hjust = 0.5, vjust = 0.5) +
+  ggtitle("PCA Biplot") +
+  xlab(paste("PC1 (", round(summary(pca_result)$cont[[1]][2, 1], 2) * 100, "%)", sep = "")) +
+  ylab(paste("PC2 (", round(summary(pca_result)$cont[[1]][2, 2], 2) * 100, "%)", sep = "")) +
+  theme_bw()
+
+correlation.matrix <- as.matrix(cor(standardized_fun, use = "pairwise.complete.obs")) # use = ... is used to exclude missing values for the corrplot
+col = colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+  
+# Plot the correlogram : Visualizing the correlation matrix
+d <- corrplot(correlation.matrix, method="color", type = "upper", col=col(200), tl.col="black", tl.srt=45, tl.cex = 0.7, cl.cex=0.1, addgrid.col = "darkgray")
+```
+
+## 10.2. Statistical analyses
+
+**Merge functional traits with data**
+
+```{r}
+merged_data <- merge(data, functional_traits, by.x = "Seedling_id", by.y = "Species_name", all.x = TRUE) %>%
+  filter(Woody == "Woody") # Keep only for woody species
+```
+
+**Statistical Analysis**
+
+```{r}
+# Prepare dataset: mean value of the functional traits for each plot
+temp_fun <- merged_data %>%
+  select(Plot_id, Seedling_id, Wood_density, SLA_petiole_included, Seed_dry_mass, Leaf_P, Leaf_nitrogen_leaf_dry_mass, Leaf_area_6, Leaf_thickness, Stem_diameter, Leaf_density, Age) # Selecting relevant columns
+
+temp_fun <- temp_fun %>%
+  group_by(Plot_id, Age) %>%
+  summarise(
+    Mean_Wood_Density = mean(Wood_density, na.rm = TRUE),
+    Mean_Seed_Dry_Mass = mean(Seed_dry_mass, na.rm = TRUE),
+    Mean_SLA = mean(SLA_petiole_included, na.rm = TRUE),
+    Mean_Leaf_P = mean(Leaf_P, na.rm = TRUE),
+    Mean_Leaf_thickness = mean(Leaf_thickness, na.rm = TRUE),
+    Mean_Stem_diameter = mean(Stem_diameter, na.rm = TRUE),
+    Mean_Leaf_density = mean(Leaf_density, na.rm = TRUE),
+    Mean_Leaf_nitrogen_leaf_dry_mass = mean(Leaf_nitrogen_leaf_dry_mass, na.rm = TRUE)
+  ) %>%
+  ungroup()  # Ungroup data after summarisation
+```
+
+```{r}
+# Reshape the data for plotting
+temp_fun_long <- temp_fun %>%
+  pivot_longer(cols = c(Mean_Wood_Density, Mean_Seed_Dry_Mass, Mean_SLA, Mean_Leaf_P, Mean_Leaf_thickness, Mean_Stem_diameter, Mean_Leaf_density, Mean_Leaf_nitrogen_leaf_dry_mass),
+               names_to = "Trait", values_to = "Mean_Value")
+
+# Create the ggplot
+ggplot(temp_fun_long, aes(x = Age, y = Mean_Value)) +
+  geom_point() +
+  facet_wrap(~ Trait, scales = "free_y") +
+  geom_smooth(color = "grey30") +
+  theme_classic() +
+  labs(title = "Mean Values of Functional Traits by Site",
+       x = "Site Age",
+       y = "Mean Value") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# Functional diversity analyses
+
+# Preparing matrices
+temp_matrix <- merged_data %>%
+  select("Seedling_id", "Plot_id", "Wood_density", "Seed_dry_mass", "Leaf_nitrogen_leaf_dry_mass", "Leaf_thickness", "Leaf_density") %>%
+  drop_na() %>% # Have to remove NAs from both datasets
+  filter(!Plot_id %in% c("JOB", "CER")) # Remove AG1 & AG2 because too few woody species (<3)
+  
+trait_matrix <- temp_matrix %>%
+  select("Seedling_id", "Wood_density", "Seed_dry_mass", "Leaf_nitrogen_leaf_dry_mass", "Leaf_thickness", "Leaf_density") %>%
+  distinct(Seedling_id, .keep_all = TRUE) %>%
+  column_to_rownames(var = "Seedling_id")
+
+site_matrix <- temp_matrix %>%
+  select("Plot_id", "Seedling_id") %>%
+  group_by(Plot_id, Seedling_id) %>%
+  summarize(Count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = Seedling_id, values_from = Count, values_fill = list(Count = 0)) %>%
+  column_to_rownames(var = "Plot_id") %>%
+  select(sort(names(.))) # In order to use the functions, species need to be in the same order in both datasets
+# The 2 matrices that will be used with the FD package are in the right format
+```
+
+```{r}
+# Compute functional diversity indices
+dbFD <- dbFD(trait_matrix, site_matrix)
+```
+
+```{r}
+# Extract specific functional diversity indices
+FRic <- dbFD$FRic # Functional Richness
+FEve <- dbFD$FEve # Functional Evenness
+FDiv <- dbFD$FDiv # Functional Divergence
+FDis <- dbFD$FDis # Functional Dispersion
+RaoQ <- dbFD$RaoQ # Rao's Quadratic Entropy
+
+# Combine the indices into a data frame
+functional_diversity_df <- data.frame(
+  Plot_id = rownames(site_matrix),
+  FRic = FRic,
+  FEve = FEve,
+  FDiv = FDiv,
+  FDis = FDis,
+  RaoQ = RaoQ
+)
+
+functional_diversity_df <- merge(functional_diversity_df, plots)
+
+# Reshape the data frame to long format
+functional_diversity_long <- functional_diversity_df %>%
+  pivot_longer(cols = FRic:RaoQ, names_to = "Index", values_to = "Value")
+
+# Create the facetted plot
+ggplot(functional_diversity_long, aes(x = Age, y = Value)) +
+  geom_point() +
+  geom_smooth() +
+  facet_wrap(~ Index, scales = "free_y") +
+  labs(title = "Functional Diversity Indices by Plot_id", x = "Plot_id", y = "Value") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+
+```
